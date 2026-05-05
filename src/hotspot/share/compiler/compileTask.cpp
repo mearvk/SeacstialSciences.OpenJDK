@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -72,7 +72,7 @@ CompileTask::CompileTask(int compile_id,
 
   AbstractCompiler* comp = CompileBroker::compiler(comp_level);
   _compiler = comp;
-  _directive = DirectivesStack::getMatchingDirective(method, comp);
+  _directive = DirectivesStack::getMatchingDirective(method, comp_level);
 
   JVMCI_ONLY(_has_waiter = comp->is_jvmci();)
   JVMCI_ONLY(_blocking_jvmci_compile_state = nullptr;)
@@ -100,6 +100,14 @@ CompileTask::~CompileTask() {
     MonitorLocker wait_ml(CompileTaskWait_lock);
     wait_ml.notify_all();
   }
+  set_directive(nullptr);
+}
+
+void CompileTask::set_directive(DirectiveSet* new_directive) {
+  if (_directive != nullptr) {
+    DirectivesStack::release(_directive);
+  }
+  _directive = new_directive;
 }
 
 void CompileTask::wait_for_no_active_tasks() {

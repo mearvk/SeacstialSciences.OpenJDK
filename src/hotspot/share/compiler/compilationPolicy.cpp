@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -814,23 +814,30 @@ CompileTask* CompilationPolicy::select_task(CompileQueue* compile_queue, JavaThr
     max_method = max_task->method();
   }
 
-  methodHandle max_method_h(THREAD, max_method);
+  if (max_task != nullptr && max_method != nullptr) {
+    methodHandle max_method_h(THREAD, max_method);
+    DirectiveSet* limited_profile_directive = DirectivesStack::getMatchingDirective(max_method_h, CompLevel_limited_profile);
+    bool excludeLimitedProfile = limited_profile_directive->ExcludeOption;
 
-  if (max_task != nullptr && max_task->comp_level() == CompLevel_full_profile && TieredStopAtLevel > CompLevel_full_profile &&
-      max_method != nullptr && is_method_profiled(max_method_h) && !Arguments::is_compiler_only()) {
-    max_task->set_comp_level(CompLevel_limited_profile);
+    if (max_task->comp_level() == CompLevel_full_profile && TieredStopAtLevel > CompLevel_full_profile &&
+        !excludeLimitedProfile && is_method_profiled(max_method_h) && !Arguments::is_compiler_only()) {
+      max_task->set_comp_level(CompLevel_limited_profile);
+      max_task->set_directive(limited_profile_directive);
 
-    if (CompileBroker::compilation_is_complete(max_method_h, max_task->osr_bci(), CompLevel_limited_profile)) {
-      if (PrintTieredEvents) {
-        print_event(REMOVE_FROM_QUEUE, max_method, max_method, max_task->osr_bci(), (CompLevel)max_task->comp_level());
+      if (CompileBroker::compilation_is_complete(max_method_h, max_task->osr_bci(), CompLevel_limited_profile)) {
+        if (PrintTieredEvents) {
+          print_event(REMOVE_FROM_QUEUE, max_method, max_method, max_task->osr_bci(), (CompLevel)max_task->comp_level());
+        }
+        compile_queue->remove_and_mark_stale(max_task);
+        max_method->clear_queued_for_compilation();
+        return nullptr;
       }
-      compile_queue->remove_and_mark_stale(max_task);
-      max_method->clear_queued_for_compilation();
-      return nullptr;
-    }
 
-    if (PrintTieredEvents) {
-      print_event(UPDATE_IN_QUEUE, max_method, max_method, max_task->osr_bci(), (CompLevel)max_task->comp_level());
+      if (PrintTieredEvents) {
+        print_event(UPDATE_IN_QUEUE, max_method, max_method, max_task->osr_bci(), (CompLevel)max_task->comp_level());
+      }
+    } else {
+      DirectivesStack::release(limited_profile_directive);
     }
   }
   return max_task;

@@ -1382,7 +1382,7 @@ nmethod* CompileBroker::compile_method(const methodHandle& method, int osr_bci,
   }
 #endif
 
-  DirectiveSet* directive = DirectivesStack::getMatchingDirective(method, comp);
+  DirectiveSet* directive = DirectivesStack::getMatchingDirective(method, comp_level);
   // CompileBroker::compile_method can trap and can have pending async exception.
   nmethod* nm = CompileBroker::compile_method(method, osr_bci, comp_level, hot_count, compile_reason, directive, THREAD);
   DirectivesStack::release(directive);
@@ -2415,7 +2415,9 @@ void CompileBroker::invoke_compiler_on_method(CompileTask* task) {
     ResourceMark rm;
     task->print_post(tty);
   }
-  DirectivesStack::release(directive);
+
+    // We don't need directive further, release it
+  task->set_directive(nullptr);
 
   Log(compilation, codecache) log;
   if (log.is_debug()) {

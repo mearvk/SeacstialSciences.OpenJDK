@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -114,7 +114,7 @@ private:
   static void pop_inner(); // no lock version of pop
 public:
   static void init();
-  static DirectiveSet* getMatchingDirective(const methodHandle& mh, AbstractCompiler* comp);
+  static DirectiveSet* getMatchingDirective(const methodHandle& mh, int comp_level);
   static DirectiveSet* getDefaultDirective(AbstractCompiler* comp);
   static void push(CompilerDirectives* directive);
   static void pop(int count);
@@ -142,10 +142,10 @@ public:
   bool parse_and_add_inline(char* str, const char*& error_msg);
   void append_inline(InlineMatcher* m);
   bool should_inline(ciMethod* inlinee);
-  bool should_not_inline(ciMethod* inlinee);
+  bool should_not_inline(ciMethod* inlinee, int comp_level);
   bool should_delay_inline(ciMethod* inlinee);
   void print_inline(outputStream* st);
-  DirectiveSet* compilecommand_compatibility_init(const methodHandle& method);
+  DirectiveSet* compilecommand_compatibility_init(const methodHandle& method, int comp_level);
   bool is_exclusive_copy() { return _directive == nullptr; }
   bool matches_inline(const methodHandle& method, int inline_action);
   static DirectiveSet* clone(DirectiveSet const* src);
