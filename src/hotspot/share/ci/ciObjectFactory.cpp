@@ -48,6 +48,7 @@
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/universe.hpp"
+#include "oops/instanceKlass.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/trainingData.hpp"
 #include "runtime/handles.inline.hpp"
@@ -83,6 +84,7 @@ ciObjectFactory::ciObjectFactory(Arena* arena,
                                  int expected_size)
                                  : _arena(arena),
                                    _ci_metadata(arena, expected_size, 0, nullptr),
+                                   _shared_init_state(arena, expected_size, 0, (u1)0),
                                    _unloaded_methods(arena, 4, 0, nullptr),
                                    _unloaded_klasses(arena, 8, 0, nullptr),
                                    _unloaded_instances(arena, 4, 0, nullptr),
@@ -97,6 +99,22 @@ ciObjectFactory::ciObjectFactory(Arena* arena,
   // If the shared ci objects exist append them to this factory's objects
   if (_shared_ci_metadata != nullptr) {
     _ci_metadata.appendAll(_shared_ci_metadata);
+    // ciInstanceKlass for well-known class is shared by all
+    // compiler threads and can be updated concurrently by
+    // other compiler threads during compilation.
+    // Make local copy of class state to avoid state change
+    // during compilation.
+    int len = _ci_metadata.length();
+    for (int i = 0; i < len; i++) {
+      ciMetadata* obj = _ci_metadata.at(i);
+      if (obj->is_loaded() && obj->is_instance_klass() &&
+          obj->as_instance_klass()->is_shared()) {
+        ciInstanceKlass* cik = obj->as_instance_klass();
+        u1 state = 0;
+        GUARDED_VM_ENTRY( state = (u1)ciInstanceKlass::compute_init_state(cik->get_instanceKlass()); )
+        _shared_init_state.at_put_grow(cik->ident(), state, 0);
+      }
+    }
   }
 }
 
@@ -154,10 +172,10 @@ void ciObjectFactory::init_shared_objects() {
   ciEnv::_null_object_instance = new (_arena) ciNullObject();
   init_ident_of(ciEnv::_null_object_instance);
 
-#define VM_CLASS_DEFN(name, ignore_s)                              \
-  if (vmClasses::name##_is_loaded()) \
-    ciEnv::_##name = get_metadata(vmClasses::name())->as_instance_klass();
-
+#define VM_CLASS_DEFN(name, ignore_s)  \
+  if (vmClasses::name##_is_loaded()) { \
+    ciEnv::_##name = get_metadata(vmClasses::name())->as_instance_klass(); \
+  }
   VM_CLASSES_DO(VM_CLASS_DEFN)
 #undef VM_CLASS_DEFN
 
@@ -239,7 +257,9 @@ ciObject* ciObjectFactory::get(oop key) {
 
   NonPermObject* &bucket = find_non_perm(keyHandle);
   if (bucket != nullptr) {
-    return bucket->object();
+    ciObject* obj = bucket->object();
+    notice_new_object(obj);
+    return obj;
   }
 
   // The ciObject does not yet exist.  Create it and insert it
@@ -255,6 +275,7 @@ ciObject* ciObjectFactory::get(oop key) {
   return new_object;
 }
 
+#if INCLUDE_CDS
 void ciObjectFactory::notice_new_object(ciBaseObject* new_object) {
   if (TrainingData::need_data()) {
     ciEnv* env = ciEnv::current();
@@ -267,6 +288,7 @@ void ciObjectFactory::notice_new_object(ciBaseObject* new_object) {
     }
   }
 }
+#endif
 
 int ciObjectFactory::metadata_compare(Metadata* const& key, ciMetadata* const& elt) {
   Metadata* value = elt->constant_encoding();
@@ -350,7 +372,9 @@ ciMetadata* ciObjectFactory::get_metadata(Metadata* key) {
     notice_new_object(new_object);
     return new_object;
   }
-  return _ci_metadata.at(index)->as_metadata();
+  ciMetadata* metadata = _ci_metadata.at(index)->as_metadata();
+  notice_new_object(metadata);
+  return metadata;
 }
 
 // ------------------------------------------------------------------
@@ -414,9 +438,11 @@ ciMetadata* ciObjectFactory::create_new_metadata(Metadata* o) {
     ciInstanceKlass* holder = env->get_instance_klass(h_m()->method_holder());
     return new (arena()) ciMethod(h_m, holder);
   } else if (o->is_methodData()) {
-    // Hold methodHandle alive - might not be necessary ???
-    methodHandle h_m(THREAD, ((MethodData*)o)->method());
+    // Callers ciMethod::ensure_method_data() and ::method_data() have MH already.
     return new (arena()) ciMethodData((MethodData*)o);
+  } else if (o->is_methodCounters()) {
+    // Caller ciMethod::ensure_method_counters() has MH already.
+    return new (arena()) ciMetadata(o);
   }
 
   // The Metadata* is of some type not supported by the compiler interface.

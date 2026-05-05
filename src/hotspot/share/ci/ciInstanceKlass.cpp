@@ -53,14 +53,22 @@ ciInstanceKlass::ciInstanceKlass(Klass* k) :
   ciKlass(k)
 {
   assert(get_Klass()->is_instance_klass(), "wrong type");
-  assert(get_instanceKlass()->is_loaded(), "must be at least loaded");
+
   InstanceKlass* ik = get_instanceKlass();
+
+#ifdef ASSERT
+  if (!ik->is_loaded()) {
+    ResourceMark rm;
+    ik->print_on(tty);
+    assert(false, "must be at least loaded: %s", ik->name()->as_C_string());
+  }
+#endif // ASSERT
 
   AccessFlags access_flags = ik->access_flags();
   _flags = ciFlags(access_flags);
   _has_finalizer = ik->has_finalizer();
   _has_subklass = flags().is_final() ? subklass_false : subklass_unknown;
-  _init_state = ik->init_state();
+  _init_state = compute_init_state(ik);
   _has_nonstatic_fields = ik->has_nonstatic_fields();
   _has_nonstatic_concrete_methods = ik->has_nonstatic_concrete_methods();
   _is_hidden = ik->is_hidden();
@@ -137,11 +145,31 @@ ciInstanceKlass::ciInstanceKlass(ciSymbol* name,
 
 // ------------------------------------------------------------------
 // ciInstanceKlass::compute_shared_is_initialized
-void ciInstanceKlass::compute_shared_init_state() {
+InstanceKlass::ClassState ciInstanceKlass::compute_shared_init_state() {
   GUARDED_VM_ENTRY(
     InstanceKlass* ik = get_instanceKlass();
-    _init_state = ik->init_state();
+    // Update state of shared instance to be used by next compilation
+    _init_state = compute_init_state(ik);
+    // But return its cached state for current compilation
+    ciEnv* env = CURRENT_ENV;
+    if (env != nullptr && env->task() != nullptr) {
+      return env->get_shared_init_state(ident());
+    }
+    return _init_state;
   )
+}
+
+InstanceKlass::ClassState ciInstanceKlass::compute_init_state(InstanceKlass* ik) {
+  ASSERT_IN_VM;
+#if INCLUDE_CDS
+  ciEnv* env = CURRENT_ENV;
+  if (env != nullptr && env->is_aot_compile()) {
+    return env->compute_init_state_for_aot_compile(ik);
+  } else
+#endif
+  {
+    return ik->init_state();
+  }
 }
 
 // ------------------------------------------------------------------
@@ -319,11 +347,11 @@ void ciInstanceKlass::print_impl(outputStream* st) {
               bool_to_str(has_subklass()),
               layout_helper());
 
-    _flags.print_klass_flags();
+    _flags.print_klass_flags(st);
 
     if (_super) {
       st->print(" super=");
-      _super->print_name();
+      _super->print_name_on(st);
     }
     if (_java_mirror) {
       st->print(" mirror=PRESENT");

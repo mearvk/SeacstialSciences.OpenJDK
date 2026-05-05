@@ -47,6 +47,8 @@ private:
 
   Arena*                           _arena;
   GrowableArray<ciMetadata*>       _ci_metadata;
+  // Local copy of shared ciInstanceKlass init state for current compilation
+  GrowableArray<u1>                _shared_init_state;
   GrowableArray<ciMethod*>         _unloaded_methods;
   GrowableArray<ciKlass*>          _unloaded_klasses;
   GrowableArray<ciInstance*>       _unloaded_instances;
@@ -103,11 +105,16 @@ public:
   ciMetadata* cached_metadata(Metadata* key);
   ciSymbol* get_symbol(Symbol* key);
 
+  // Get cached init state of shared ciInstanceKlass
+  u1 shared_init_state(uint id) {
+    return _shared_init_state.at(id);
+  }
+
   // Get the ciSymbol corresponding to one of the vmSymbols.
   static ciSymbol* vm_symbol_at(vmSymbolID index);
 
   // Called on every new object made.
-  void notice_new_object(ciBaseObject* new_object);
+  void notice_new_object(ciBaseObject* new_object) NOT_CDS_RETURN;
 
   // Get the ciMethod representing an unloaded/unfound method.
   ciMethod* get_unloaded_method(ciInstanceKlass* holder,
