@@ -877,6 +877,7 @@ class PhaseIdealLoop : public PhaseTransform {
   friend class SuperWord;
   friend class ShenandoahBarrierC2Support;
   friend class AutoNodeBudget;
+  friend class DuplicateLoopBackedge;
 
   Arena _arena; // For data whose lifetime is a single pass of loop optimizations
 
@@ -2080,6 +2081,7 @@ public:
 
 class CountedLoopConverter {
   friend class PhaseIdealLoop;
+  friend class DuplicateLoopBackedge;
 
   // Match increment with optional truncation
   class TruncatedIncrement {
