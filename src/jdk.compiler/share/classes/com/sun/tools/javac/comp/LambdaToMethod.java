@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,11 +79,13 @@ import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.javac.util.Options;
+import com.sun.tools.javac.util.Pair;
 
 import javax.lang.model.element.ElementKind;
 import java.lang.invoke.LambdaMetafactory;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -157,6 +159,9 @@ public class LambdaToMethod extends TreeTranslator {
     /** deduplicate lambda implementation methods */
     private final boolean deduplicateLambdas;
 
+    /** the maximum number of deserialization cases per one deserialize method */
+    private final int deserializableLambdaCaseCountLimit;
+
     /** Flag for alternate metafactories indicating the lambda object is intended to be serializable */
     public static final int FLAG_SERIALIZABLE = LambdaMetafactory.FLAG_SERIALIZABLE;
 
@@ -165,6 +170,9 @@ public class LambdaToMethod extends TreeTranslator {
 
     /** Flag for alternate metafactories indicating the lambda object requires multiple bridges */
     public static final int FLAG_BRIDGES = LambdaMetafactory.FLAG_BRIDGES;
+
+    /** the default number of deserialization cases per one deserialize method */
+    private static final int MAXIMUM_DESERIALIZATION_CASE_COUNT = 200;
 
     // <editor-fold defaultstate="collapsed" desc="Instantiating">
     protected static final Context.Key<LambdaToMethod> unlambdaKey = new Context.Key<>();
@@ -203,6 +211,14 @@ public class LambdaToMethod extends TreeTranslator {
         debugLinesOrVars = lineDebugInfo || varDebugInfo;
         verboseDeduplication = options.isSet("debug.dumpLambdaToMethodDeduplication");
         deduplicateLambdas = options.getBoolean("deduplicateLambdas", true);
+        String deserializableLambdaCaseCountLimitText = options.get("deserializableLambdaCaseCountLimit");
+        int deserializableLambdaCaseCountLimit = MAXIMUM_DESERIALIZATION_CASE_COUNT;
+        try {
+            deserializableLambdaCaseCountLimit = Integer.parseInt(deserializableLambdaCaseCountLimitText);
+        } catch (NumberFormatException _) {
+            //ignore invalid values and continue with the default
+        }
+        this.deserializableLambdaCaseCountLimit = deserializableLambdaCaseCountLimit;
     }
     // </editor-fold>
 
@@ -248,17 +264,7 @@ public class LambdaToMethod extends TreeTranslator {
         /**
          * list of deserialization cases
          */
-        private final Map<String, ListBuffer<JCStatement>> deserializeCases = new HashMap<>();
-
-        /**
-         * deserialize method symbol
-         */
-        private final MethodSymbol deserMethodSym;
-
-        /**
-         * deserialize method parameter symbol
-         */
-        private final VarSymbol deserParamSym;
+        private final Map<String, ListBuffer<DeserializationCase>> deserializeCases = new HashMap<>();
 
         private final JCClassDecl clazz;
 
@@ -266,11 +272,6 @@ public class LambdaToMethod extends TreeTranslator {
 
         private KlassInfo(JCClassDecl clazz) {
             this.clazz = clazz;
-            MethodType type = new MethodType(List.of(syms.serializedLambdaType), syms.objectType,
-                    List.nil(), syms.methodClass);
-            deserMethodSym = makePrivateSyntheticMethod(STATIC, names.deserializeLambda, type, clazz.sym);
-            deserParamSym = new VarSymbol(FINAL, names.fromString("lambda"),
-                    syms.serializedLambdaType, deserMethodSym);
         }
 
         private void addMethod(JCTree decl) {
@@ -319,7 +320,7 @@ public class LambdaToMethod extends TreeTranslator {
                 int prevPos = make.pos;
                 try {
                     make.at(tree);
-                    kInfo.addMethod(makeDeserializeMethod());
+                    makeDeserializeMethod(0);
                 } finally {
                     make.at(prevPos);
                 }
@@ -647,36 +648,108 @@ public class LambdaToMethod extends TreeTranslator {
         return trans_block;
     }
 
-    private JCMethodDecl makeDeserializeMethod() {
+    private Pair<MethodSymbol, JCMethodDecl> makeDeserializeMethod(int delegatingIndex) {
+        Name currentName = delegatingIndex > 0 ? names.deserializeLambda.append('$', names.fromString(String.valueOf(delegatingIndex))) : names.deserializeLambda;
+        MethodType type = new MethodType(List.of(syms.serializedLambdaType), syms.objectType,
+                List.nil(), syms.methodClass);
+        MethodSymbol deserMethodSym = makePrivateSyntheticMethod(STATIC, currentName, type, kInfo.clazz.sym);
+        VarSymbol deserParamSym = new VarSymbol(FINAL, names.fromString("lambda"),
+                syms.serializedLambdaType, deserMethodSym);
+
         ListBuffer<JCCase> cases = new ListBuffer<>();
         ListBuffer<JCBreak> breaks = new ListBuffer<>();
-        for (Map.Entry<String, ListBuffer<JCStatement>> entry : kInfo.deserializeCases.entrySet()) {
-            JCBreak br = make.Break(null);
-            breaks.add(br);
-            List<JCStatement> stmts = entry.getValue().append(br).toList();
-            cases.add(make.Case(JCCase.STATEMENT, List.of(make.ConstantCaseLabel(make.Literal(entry.getKey()))), null, stmts, null));
+        int deserializationCaseCount = 0;
+        for (Iterator<Map.Entry<String, ListBuffer<DeserializationCase>>> it = kInfo.deserializeCases.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<String, ListBuffer<DeserializationCase>> entry = it.next();
+            ListBuffer<JCStatement> stmts = new ListBuffer<>();
+            while (entry.getValue().nonEmpty() && deserializationCaseCount < deserializableLambdaCaseCountLimit) {
+                DeserializationCase current = entry.getValue().next();
+                stmts.append(makeDeserializationCaseStatement(deserParamSym, current));
+                deserializationCaseCount++;
+            }
+            if (entry.getValue().isEmpty()) {
+                JCBreak br = make.Break(null);
+                breaks.add(br);
+                stmts.append(br);
+                it.remove();
+            }
+            cases.add(make.Case(JCCase.STATEMENT, List.of(make.ConstantCaseLabel(make.Literal(entry.getKey()))), null, stmts.toList(), null));
+
+            if (deserializationCaseCount >= deserializableLambdaCaseCountLimit) {
+                break;
+            }
         }
-        JCSwitch sw = make.Switch(deserGetter("getImplMethodName", syms.stringType), cases.toList());
+        JCSwitch sw = make.Switch(deserGetter(deserParamSym, "getImplMethodName", syms.stringType), cases.toList());
         for (JCBreak br : breaks) {
             br.target = sw;
         }
+        JCStatement fallback;
+        if (kInfo.deserializeCases.isEmpty()) {
+            fallback = make.Throw(makeNewClass(
+                        syms.illegalArgumentExceptionType,
+                        List.of(make.Literal("Invalid lambda deserialization"))));
+        } else {
+            Pair<MethodSymbol, JCMethodDecl> delegate = makeDeserializeMethod(delegatingIndex + 1);
+            fallback = make.Return(make.App(make.QualIdent(delegate.fst), List.of(make.Ident(deserParamSym))));
+        }
         JCBlock body = make.Block(0L, List.of(
                 sw,
-                make.Throw(makeNewClass(
-                        syms.illegalArgumentExceptionType,
-                        List.of(make.Literal("Invalid lambda deserialization"))))));
-        JCMethodDecl deser = make.MethodDef(make.Modifiers(kInfo.deserMethodSym.flags()),
-                names.deserializeLambda,
-                make.QualIdent(kInfo.deserMethodSym.getReturnType().tsym),
+                fallback));
+        JCMethodDecl deser = make.MethodDef(make.Modifiers(deserMethodSym.flags()),
+                deserMethodSym.name,
+                make.QualIdent(deserMethodSym.getReturnType().tsym),
                 List.nil(),
-                List.of(make.VarDef(kInfo.deserParamSym, null)),
+                List.of(make.VarDef(deserParamSym, null)),
                 List.nil(),
                 body,
                 null);
-        deser.sym = kInfo.deserMethodSym;
-        deser.type = kInfo.deserMethodSym.type;
+        deser.sym = deserMethodSym;
+        deser.type = deserMethodSym.type;
         //System.err.printf("DESER: '%s'\n", deser);
-        return lower.translateMethod(attrEnv, deser, make);
+        JCMethodDecl result = lower.translateMethod(attrEnv, deser, make);
+        kInfo.addMethod(result);
+        return Pair.of(deserMethodSym, result);
+    }
+
+    private JCStatement makeDeserializationCaseStatement(VarSymbol serializedLambda, DeserializationCase cse) {
+        ListBuffer<JCExpression> serArgs = new ListBuffer<>();
+        int i = 0;
+        for (Type t : cse.indyType().getParameterTypes()) {
+            List<JCExpression> indexAsArg = new ListBuffer<JCExpression>().append(make.Literal(i)).toList();
+            List<Type> argTypes = new ListBuffer<Type>().append(syms.intType).toList();
+            serArgs.add(make.TypeCast(types.erasure(t), deserGetter(serializedLambda, "getCapturedArg", syms.objectType, argTypes, indexAsArg)));
+            ++i;
+        }
+        JCExpression kindTest = eqTest(syms.intType, deserGetter(serializedLambda, "getImplMethodKind", syms.intType),
+                make.Literal(cse.implMethodKind()));
+
+        JCStatement stmt = make.If(
+                deserTest(serializedLambda,
+                          deserTest(serializedLambda,
+                                    deserTest(serializedLambda,
+                                              deserTest(serializedLambda,
+                                                        deserTest(serializedLambda,
+                                                                  deserTest(serializedLambda,
+                                                                            kindTest,
+                                                                            "getFunctionalInterfaceClass",
+                                                                            cse.functionalInterfaceClass()),
+                                                                  "getFunctionalInterfaceMethodName",
+                                                                  cse.functionalInterfaceMethodName()),
+                                                        "getFunctionalInterfaceMethodSignature",
+                                                        cse.functionalInterfaceMethodSignature()),
+                                              "getImplClass",
+                                              cse.implClass()),
+                                    "getImplMethodSignature",
+                                    cse.implMethodSignature()),
+                          "getInstantiatedMethodType",
+                          cse.instantiatedMethodType()),
+                make.Return(makeIndyCall(
+                        cse.pos(),
+                        syms.lambdaMetafactory,
+                        names.altMetafactory,
+                        cse.staticArgs(), cse.indyType(), serArgs.toList(), cse.samSym().name)),
+                null);
+        return stmt;
     }
 
     /** Make an attributed class instance creation expression.
@@ -721,36 +794,8 @@ public class LambdaToMethod extends TreeTranslator {
         String instantiatedMethodType = typeSig(types.erasure(samType));
 
         int implMethodKind = refSym.referenceKind();
-        JCExpression kindTest = eqTest(syms.intType, deserGetter("getImplMethodKind", syms.intType),
-                make.Literal(implMethodKind));
-        ListBuffer<JCExpression> serArgs = new ListBuffer<>();
-        int i = 0;
-        for (Type t : indyType.getParameterTypes()) {
-            List<JCExpression> indexAsArg = new ListBuffer<JCExpression>().append(make.Literal(i)).toList();
-            List<Type> argTypes = new ListBuffer<Type>().append(syms.intType).toList();
-            serArgs.add(make.TypeCast(types.erasure(t), deserGetter("getCapturedArg", syms.objectType, argTypes, indexAsArg)));
-            ++i;
-        }
-        JCStatement stmt = make.If(
-                deserTest(deserTest(deserTest(deserTest(deserTest(deserTest(
-                                                                kindTest,
-                                                                "getFunctionalInterfaceClass", functionalInterfaceClass),
-                                                        "getFunctionalInterfaceMethodName", functionalInterfaceMethodName),
-                                                "getFunctionalInterfaceMethodSignature", functionalInterfaceMethodSignature),
-                                        "getImplClass", implClass),
-                                "getImplMethodSignature", implMethodSignature),
-                        "getInstantiatedMethodType", instantiatedMethodType),
-                make.Return(makeIndyCall(
-                        pos,
-                        syms.lambdaMetafactory,
-                        names.altMetafactory,
-                        staticArgs, indyType, serArgs.toList(), samSym.name)),
-                null);
-        ListBuffer<JCStatement> stmts = kInfo.deserializeCases.get(implMethodName);
-        if (stmts == null) {
-            stmts = new ListBuffer<>();
-            kInfo.deserializeCases.put(implMethodName, stmts);
-        }
+        ListBuffer<DeserializationCase> cases =
+                kInfo.deserializeCases.computeIfAbsent(implMethodName, _ -> new ListBuffer<>());
         if (dumpLambdaDeserializationStats) {
             log.note(pos, Notes.LambdaDeserializationStat(
                     functionalInterfaceClass,
@@ -762,7 +807,12 @@ public class LambdaToMethod extends TreeTranslator {
                     implMethodSignature,
                     instantiatedMethodType));
         }
-        stmts.append(stmt);
+        cases.append(new DeserializationCase(implMethodKind, functionalInterfaceClass,
+                                             functionalInterfaceMethodName, functionalInterfaceMethodSignature,
+                                             implClass, implMethodName,
+                                             implMethodSignature, instantiatedMethodType,
+                                             samSym, pos,
+                                             staticArgs, indyType));
     }
 
     private JCExpression eqTest(Type argType, JCExpression arg1, JCExpression arg2) {
@@ -772,13 +822,13 @@ public class LambdaToMethod extends TreeTranslator {
         return testExpr;
     }
 
-    private JCExpression deserTest(JCExpression prev, String func, String lit) {
+    private JCExpression deserTest(VarSymbol serializedLambda, JCExpression prev, String func, String value) {
         MethodType eqmt = new MethodType(List.of(syms.objectType), syms.booleanType, List.nil(), syms.methodClass);
         Symbol eqsym = rs.resolveQualifiedMethod(null, attrEnv, syms.objectType, names.equals, List.of(syms.objectType), List.nil());
         JCMethodInvocation eqtest = make.Apply(
                 List.nil(),
-                make.Select(deserGetter(func, syms.stringType), eqsym).setType(eqmt),
-                List.of(make.Literal(lit)));
+                make.Select(deserGetter(serializedLambda, func, syms.stringType), eqsym).setType(eqmt),
+                List.of(make.Literal(value)));
         eqtest.setType(syms.booleanType);
         JCBinary compound = make.Binary(Tag.AND, prev, eqtest);
         compound.operator = operators.resolveBinary(compound, Tag.AND, syms.booleanType, syms.booleanType);
@@ -786,18 +836,25 @@ public class LambdaToMethod extends TreeTranslator {
         return compound;
     }
 
-    private JCExpression deserGetter(String func, Type type) {
-        return deserGetter(func, type, List.nil(), List.nil());
+    private JCExpression deserGetter(VarSymbol serializedLambda, String func, Type type) {
+        return deserGetter(serializedLambda, func, type, List.nil(), List.nil());
     }
 
-    private JCExpression deserGetter(String func, Type type, List<Type> argTypes, List<JCExpression> args) {
+    private JCExpression deserGetter(VarSymbol serializedLambda, String func, Type type, List<Type> argTypes, List<JCExpression> args) {
         MethodType getmt = new MethodType(argTypes, type, List.nil(), syms.methodClass);
         Symbol getsym = rs.resolveQualifiedMethod(null, attrEnv, syms.serializedLambdaType, names.fromString(func), argTypes, List.nil());
         return make.Apply(
                 List.nil(),
-                make.Select(make.Ident(kInfo.deserParamSym).setType(syms.serializedLambdaType), getsym).setType(getmt),
+                make.Select(make.Ident(serializedLambda).setType(syms.serializedLambdaType), getsym).setType(getmt),
                 args).setType(type);
     }
+
+    private record DeserializationCase(int implMethodKind, String functionalInterfaceClass,
+                                       String functionalInterfaceMethodName, String functionalInterfaceMethodSignature,
+                                       String implClass, String implMethodName,
+                                       String implMethodSignature, String instantiatedMethodType,
+                                       MethodSymbol samSym, DiagnosticPosition pos,
+                                       List<LoadableConstant> staticArgs, MethodType indyType) {}
 
     /**
      * Create new synthetic method with given flags, name, type, owner
