@@ -88,8 +88,13 @@ final class CAccessible extends CFRetainedResource implements Accessible {
         if (accessible == null) throw new NullPointerException();
         this.accessible = accessible;
 
-        if (accessible instanceof Component) {
-            addNotificationListeners((Component)accessible);
+        if (accessible instanceof Component component) {
+            addNotificationListeners(component);
+            component.addPropertyChangeListener("ancestor", (e) -> {
+                if (e.getNewValue() == null) {
+                    dispose();
+                }
+            });
         }
     }
 
