@@ -372,6 +372,8 @@ private:
   // Compute the escape state for arguments to a call.
   void process_call_arguments(CallNode *call);
 
+  bool returns_an_argument(CallNode* call);
+
   // Add PointsToNode node corresponding to a call
   void add_call_node(CallNode* call);
 
@@ -485,6 +487,8 @@ private:
   // Optimize ideal graph.
   void optimize_ideal_graph(GrowableArray<Node*>& ptr_cmp_worklist,
                             GrowableArray<MemBarStoreStoreNode*>& storestore_worklist);
+  // Expand flat accesses to accesses to each component if the object does not escape
+  void optimize_flat_accesses(GrowableArray<SafePointNode*>& sfn_worklist);
   // Optimize objects compare.
   const TypeInt* optimize_ptr_compare(Node* left, Node* right);
 
@@ -658,9 +662,12 @@ public:
 
   // To be used by, e.g., BarrierSetC2 impls
   Node* get_addp_base(Node* addp);
+  DEBUG_ONLY(static bool is_load_array_klass_related(const Node* uncast_base));
 
   // Utility function for nodes that load an object
   void add_objload_to_connection_graph(Node* n, Unique_Node_List* delayed_worklist);
+
+  void add_proj(Node* n, Unique_Node_List* delayed_worklist);
 
   // Add LocalVar node and edge if possible
   void add_local_var_and_edge(Node* n, PointsToNode::EscapeState es, Node* to,
@@ -686,6 +693,8 @@ public:
 
   void add_to_congraph_unsafe_access(Node* n, uint opcode, Unique_Node_List* delayed_worklist);
   bool add_final_edges_unsafe_access(Node* n, uint opcode);
+
+  static bool compatible_return(CallJavaNode* call, uint k);
 
 #ifndef PRODUCT
   static int _no_escape_counter;

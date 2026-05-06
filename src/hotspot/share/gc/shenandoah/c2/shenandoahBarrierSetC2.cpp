@@ -965,7 +965,7 @@ void ShenandoahBarrierSetC2::clone_at_expansion(PhaseMacroExpand* phase, ArrayCo
     call = phase->transform_later(call);
 
     // Hook up the whole thing into the graph
-    phase->igvn().replace_node(ac, call);
+    phase->replace_node(ac, call);
   } else {
     BarrierSetC2::clone_at_expansion(phase, ac);
   }
@@ -985,9 +985,9 @@ void ShenandoahBarrierSetC2::unregister_potential_barrier_node(Node* node) const
   }
 }
 
-void ShenandoahBarrierSetC2::eliminate_gc_barrier(PhaseMacroExpand* macro, Node* node) const {
+void ShenandoahBarrierSetC2::eliminate_gc_barrier(PhaseIterGVN* igvn, Node* node) const {
   if (is_shenandoah_wb_pre_call(node)) {
-    shenandoah_eliminate_wb_pre(node, &macro->igvn());
+    shenandoah_eliminate_wb_pre(node, igvn);
   }
   if (ShenandoahCardBarrier && node->Opcode() == Op_CastP2X) {
     Node* shift = node->unique_out();
@@ -998,11 +998,11 @@ void ShenandoahBarrierSetC2::eliminate_gc_barrier(PhaseMacroExpand* macro, Node*
         assert(mem->Opcode() == Op_LoadB, "unexpected code shape");
         // The load is checking if the card has been written so
         // replace it with zero to fold the test.
-        macro->replace_node(mem, macro->intcon(0));
+        igvn->replace_node(mem, igvn->intcon(0));
         continue;
       }
       assert(mem->is_Store(), "store required");
-      macro->replace_node(mem, mem->in(MemNode::Memory));
+      igvn->replace_node(mem, mem->in(MemNode::Memory));
     }
   }
 }
@@ -1134,7 +1134,7 @@ void ShenandoahBarrierSetC2::verify_gc_barriers(Compile* compile, CompilePhase p
 
 Node* ShenandoahBarrierSetC2::ideal_node(PhaseGVN* phase, Node* n, bool can_reshape) const {
   if (is_shenandoah_wb_pre_call(n)) {
-    uint cnt = ShenandoahBarrierSetC2::write_barrier_pre_Type()->domain()->cnt();
+    uint cnt = ShenandoahBarrierSetC2::write_barrier_pre_Type()->domain_sig()->cnt();
     if (n->req() > cnt) {
       Node* addp = n->in(cnt);
       if (has_only_shenandoah_wb_pre_uses(addp)) {
@@ -1220,7 +1220,7 @@ bool ShenandoahBarrierSetC2::final_graph_reshaping(Compile* compile, Node* n, ui
       assert (n->is_Call(), "");
       CallNode *call = n->as_Call();
       if (ShenandoahBarrierSetC2::is_shenandoah_wb_pre_call(call)) {
-        uint cnt = ShenandoahBarrierSetC2::write_barrier_pre_Type()->domain()->cnt();
+        uint cnt = ShenandoahBarrierSetC2::write_barrier_pre_Type()->domain_sig()->cnt();
         if (call->req() > cnt) {
           assert(call->req() == cnt + 1, "only one extra input");
           Node *addp = call->in(cnt);

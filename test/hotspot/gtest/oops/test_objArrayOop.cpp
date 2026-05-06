@@ -22,8 +22,12 @@
  */
 
 #include "oops/objArrayOop.hpp"
+#include "oops/refArrayOop.hpp"
 #include "unittest.hpp"
 #include "utilities/globalDefinitions.hpp"
+
+// FIXME This test needs to be rewritten after objArray/refArray/flatArray rework
+// Tracked by JDK-8383386
 
 TEST_VM(objArrayOop, osize) {
   static const struct {
@@ -51,7 +55,7 @@ TEST_VM(objArrayOop, osize) {
   for (int i = 0; x[i].result != -1; i++) {
     if (x[i].objal == (int)ObjectAlignmentInBytes && x[i].coops == UseCompressedOops &&
         x[i].coh == UseCompactObjectHeaders) {
-      EXPECT_EQ(objArrayOopDesc::object_size(1), (size_t)x[i].result);
+      EXPECT_EQ(refArrayOopDesc::object_size(1), (size_t)x[i].result);
     }
   }
 }

@@ -34,6 +34,7 @@ import java.util.StringJoiner;
 import java.util.stream.Collectors;
 
 import jdk.internal.access.SharedSecrets;
+import jdk.internal.reflect.AccessFlagSet;
 import jdk.internal.vm.annotation.Stable;
 import sun.reflect.annotation.AnnotationParser;
 import sun.reflect.annotation.AnnotationSupport;
@@ -202,6 +203,7 @@ public abstract sealed class Executable extends AccessibleObject
      * {@return an unmodifiable set of the {@linkplain AccessFlag
      * access flags} for the executable represented by this object,
      * possibly empty}
+     * The {@code AccessFlags} may depend on the class file format version of the class.
      *
      * @see #getModifiers()
      * @jvms 4.6 Methods
@@ -209,9 +211,7 @@ public abstract sealed class Executable extends AccessibleObject
      */
     @Override
     public Set<AccessFlag> accessFlags() {
-        return reflectionFactory.parseAccessFlags(getModifiers(),
-                                                  AccessFlag.Location.METHOD,
-                                                  getDeclaringClass());
+        return AccessFlagSet.ofValidated(AccessFlagSet.METHOD_FLAGS, getModifiers());
     }
 
     /**
