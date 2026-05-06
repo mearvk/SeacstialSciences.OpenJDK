@@ -243,6 +243,24 @@ static LPVOID virtualAllocExNuma(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSiz
   return result;
 }
 
+static void* lookup_kernelbase_library() {
+  const char* const name = "KernelBase";
+  char ebuf[1024];
+  void* const handle = os::dll_load(name, ebuf, sizeof(ebuf));
+  if (handle == nullptr) {
+    log_trace(os)("Failed to load library: %s: %s", name, ebuf);
+  }
+  return handle;
+}
+
+void* os::win32::lookup_kernelbase_symbol(const char* name) {
+  static void* const handle = lookup_kernelbase_library();
+  if (handle == nullptr) {
+    return nullptr;
+  }
+  return os::dll_lookup(handle, name);
+}
+
 // Logging wrapper for MapViewOfFileEx
 static LPVOID mapViewOfFileEx(HANDLE hFileMappingObject, DWORD  dwDesiredAccess, DWORD  dwFileOffsetHigh,
                               DWORD  dwFileOffsetLow, SIZE_T dwNumberOfBytesToMap, LPVOID lpBaseAddress) {
@@ -3251,14 +3269,27 @@ char* os::replace_existing_mapping_with_file_mapping(char* base, size_t size, in
   return map_memory_to_file(base, size, fd);
 }
 
+// VirtualAlloc2 / MapViewOfFile3 (Windows 1803+). Resolved in os::init_2() via lookup_kernelbase_symbol.
+os::win32::VirtualAlloc2Fn os::win32::VirtualAlloc2 = nullptr;
+
+os::win32::MapViewOfFile3Fn os::win32::MapViewOfFile3 = nullptr;
+
+static bool is_VirtualAlloc2_supported() {
+  return os::win32::VirtualAlloc2 != nullptr;
+}
+
+static bool is_MapViewOfFile3_supported() {
+  return os::win32::MapViewOfFile3 != nullptr;
+}
+
 // Multiple threads can race in this code but it's not possible to unmap small sections of
 // virtual space to get requested alignment, like posix-like os's.
 // Windows prevents multiple thread from remapping over each other so this loop is thread-safe.
-static char* map_or_reserve_memory_aligned(size_t size, size_t alignment, int file_desc, MemTag mem_tag) {
+static char* reserve_memory_aligned(size_t size, size_t alignment, MemTag mem_tag) {
   assert(is_aligned(alignment, os::vm_allocation_granularity()),
-      "Alignment must be a multiple of allocation granularity (page size)");
+      "Alignment must be a multiple of allocation granularity");
   assert(is_aligned(size, os::vm_allocation_granularity()),
-      "Size must be a multiple of allocation granularity (page size)");
+      "Size must be a multiple of allocation granularity");
 
   size_t extra_size = size + alignment;
   assert(extra_size >= size, "overflow, size is too large to allow alignment");
@@ -3267,30 +3298,132 @@ static char* map_or_reserve_memory_aligned(size_t size, size_t alignment, int fi
   static const int max_attempts = 20;
 
   for (int attempt = 0; attempt < max_attempts && aligned_base == nullptr; attempt ++) {
-    char* extra_base = file_desc != -1 ? os::map_memory_to_file(extra_size, file_desc, mem_tag) :
-                                         os::reserve_memory(extra_size, mem_tag);
+    char* extra_base = os::reserve_memory(extra_size, mem_tag);
     if (extra_base == nullptr) {
       return nullptr;
     }
     // Do manual alignment
     aligned_base = align_up(extra_base, alignment);
+    os::release_memory(extra_base, extra_size);
 
-    if (file_desc != -1) {
-      os::unmap_memory(extra_base, extra_size);
-    } else {
-      os::release_memory(extra_base, extra_size);
+    // Attempt to reserve, into the just vacated space, the slightly smaller aligned area.
+    // Which may fail, hence the loop.
+    aligned_base = os::attempt_reserve_memory_at(aligned_base, size, mem_tag);
+  }
+
+  assert(aligned_base != nullptr,
+      "Did not manage to re-map after %d attempts (size %zu, alignment %zu)", max_attempts, size, alignment);
+
+  return aligned_base;
+}
+
+// Similar to reserve_memory_aligned, multiple threads can race in this code.
+static char* map_memory_aligned(size_t size, size_t alignment, int file_desc, MemTag mem_tag) {
+  assert(is_aligned(alignment, os::vm_allocation_granularity()),
+      "Alignment must be a multiple of allocation granularity");
+  assert(is_aligned(size, os::vm_allocation_granularity()),
+      "Size must be a multiple of allocation granularity");
+
+  size_t extra_size = size + alignment;
+  assert(extra_size >= size, "overflow, size is too large to allow alignment");
+
+  char* aligned_base = nullptr;
+  static const int max_attempts = 20;
+
+  for (int attempt = 0; attempt < max_attempts && aligned_base == nullptr; attempt ++) {
+    char* extra_base = os::map_memory_to_file(extra_size, file_desc, mem_tag);
+    if (extra_base == nullptr) {
+      return nullptr;
     }
+    // Do manual alignment
+    aligned_base = align_up(extra_base, alignment);
+    os::unmap_memory(extra_base, extra_size);
 
     // Attempt to map, into the just vacated space, the slightly smaller aligned area.
     // Which may fail, hence the loop.
-    aligned_base = file_desc != -1 ? os::attempt_map_memory_to_file_at(aligned_base, size, file_desc, mem_tag) :
-                                     os::attempt_reserve_memory_at(aligned_base, size, mem_tag);
+    aligned_base = os::attempt_map_memory_to_file_at(aligned_base, size, file_desc, mem_tag);
   }
 
   assert(aligned_base != nullptr,
       "Did not manage to re-map after %d attempts (size %zu, alignment %zu, file descriptor %d)", max_attempts, size, alignment, file_desc);
 
   return aligned_base;
+}
+
+// MapViewOfFile3 supports alignment natively.
+static char* map_memory_aligned_va2(size_t size, size_t alignment, int file_desc, MemTag mem_tag) {
+  assert(file_desc != -1,"file descriptor should not be -1");
+  assert(is_aligned(alignment, os::vm_allocation_granularity()),
+         "Alignment must be a multiple of allocation granularity");
+  assert(is_aligned(size, os::vm_allocation_granularity()),
+         "Size must be a multiple of allocation granularity");
+
+  MEM_ADDRESS_REQUIREMENTS requirements = {0};
+  requirements.Alignment = alignment;
+
+  MEM_EXTENDED_PARAMETER param = {0};
+  param.Type = MemExtendedParameterAddressRequirements;
+  param.Pointer = &requirements;
+
+  char* aligned_base = nullptr;
+
+  // File-backed aligned mapping.
+  HANDLE fh = (HANDLE)_get_osfhandle(file_desc);
+  HANDLE fileMapping = CreateFileMapping(fh, nullptr, PAGE_READWRITE,(DWORD)(size >> 32), (DWORD)(size & 0xFFFFFFFF), nullptr);
+  if (fileMapping != nullptr) {
+    aligned_base = (char*)os::win32::MapViewOfFile3(
+            fileMapping,
+            GetCurrentProcess(),
+            nullptr,  // let the system choose an aligned address
+            0,        // offset
+            size,
+            0,        // no special allocation type flags
+            PAGE_READWRITE,
+            &param, 1);
+    CloseHandle(fileMapping);
+  }
+
+  if (aligned_base != nullptr) {
+    assert(is_aligned(aligned_base, alignment), "Result must be aligned");
+    MemTracker::record_virtual_memory_reserve_and_commit(aligned_base, size, CALLER_PC, mem_tag);
+    return aligned_base;
+  }
+  log_trace(os)("Aligned allocation via MapViewOfFile3 failed, falling back to retry loop. GetLastError->%lu.", GetLastError());
+  return map_memory_aligned(size, alignment, file_desc, mem_tag);
+}
+
+// VirtualAlloc2 supports alignment natively.
+static char* reserve_memory_aligned_va2(size_t size, size_t alignment, MemTag mem_tag) {
+  assert(is_aligned(alignment, os::vm_allocation_granularity()),
+         "Alignment must be a multiple of allocation granularity");
+  assert(is_aligned(size, os::vm_allocation_granularity()),
+         "Size must be a multiple of allocation granularity");
+
+  MEM_ADDRESS_REQUIREMENTS requirements = {0};
+  requirements.Alignment = alignment;
+
+  MEM_EXTENDED_PARAMETER param = {0};
+  param.Type = MemExtendedParameterAddressRequirements;
+  param.Pointer = &requirements;
+
+  char* aligned_base = nullptr;
+
+  // Anonymous aligned reservation.
+  aligned_base = (char*)os::win32::VirtualAlloc2(
+          GetCurrentProcess(),
+          nullptr,  // let the system choose an aligned address
+          size,
+          MEM_RESERVE,
+          PAGE_READWRITE,
+          &param, 1);
+
+  if (aligned_base != nullptr) {
+    assert(is_aligned(aligned_base, alignment), "Result must be aligned");
+    MemTracker::record_virtual_memory_reserve(aligned_base, size, CALLER_PC, mem_tag);
+    return aligned_base;
+  }
+  log_trace(os)("Aligned allocation via VirtualAlloc2 failed, falling back to retry loop. GetLastError->%lu.", GetLastError());
+  return reserve_memory_aligned(size, alignment, mem_tag);
 }
 
 size_t os::commit_memory_limit() {
@@ -3340,15 +3473,165 @@ size_t os::reserve_memory_limit() {
 
 char* os::reserve_memory_aligned(size_t size, size_t alignment, MemTag mem_tag, bool exec) {
   // exec can be ignored
-  return map_or_reserve_memory_aligned(size, alignment, -1/* file_desc */, mem_tag);
+  if (is_VirtualAlloc2_supported()) {
+    return reserve_memory_aligned_va2(size, alignment, mem_tag);
+  }
+  return reserve_memory_aligned(size, alignment, mem_tag);
 }
 
 char* os::map_memory_to_file_aligned(size_t size, size_t alignment, int fd, MemTag mem_tag) {
-  return map_or_reserve_memory_aligned(size, alignment, fd, mem_tag);
+  if (is_MapViewOfFile3_supported()) {
+    return map_memory_aligned_va2(size, alignment, fd, mem_tag);
+  }
+  return map_memory_aligned(size, alignment, fd, mem_tag);
 }
 
 char* os::pd_reserve_memory(size_t bytes, bool exec) {
   return pd_attempt_reserve_memory_at(nullptr /* addr */, bytes, exec);
+}
+
+// This allocates a placeholder via VirtualAlloc2(MEM_RESERVE_PLACEHOLDER).
+static os::PlaceholderRegion reserve_placeholder_memory_helper(size_t bytes, bool exec, char* addr) {
+  if (!is_VirtualAlloc2_supported()) {
+    return os::PlaceholderRegion();
+  }
+
+  char* res = (char*)os::win32::VirtualAlloc2(
+    GetCurrentProcess(),
+    addr,
+    bytes,
+    MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+    PAGE_NOACCESS,
+    nullptr, 0);
+
+  if (res != nullptr) {
+    log_trace(os)("VirtualAlloc2 placeholder of size (%zu) returned " PTR_FORMAT ".", bytes, p2i(res));
+    return os::PlaceholderRegion(res, bytes);
+  } else {
+    PreserveLastError ple;
+    log_warning(os)("VirtualAlloc2 placeholder reservation of size (%zu) at " PTR_FORMAT " failed (%u).", bytes, p2i(addr), ple.v);
+    return os::PlaceholderRegion();
+  }
+}
+
+os::PlaceholderRegion os::pd_reserve_placeholder_memory(size_t bytes, bool exec, char* addr) {
+  return reserve_placeholder_memory_helper(bytes, exec, addr);
+}
+
+os::PlaceholderRegionPair os::pd_split_memory(const PlaceholderRegion& orig, size_t offset) {
+  guarantee(is_VirtualAlloc2_supported(), "pd_split_memory requires VirtualAlloc2 on Windows.");
+
+  char* base = orig.base();
+  size_t region_size = orig.size();
+
+  assert(base != nullptr, "Region base cannot be null.");
+  assert(offset > 0, "Offset must be positive (nothing to split at 0).");
+  assert(offset < region_size, "Offset must be less than region size.");
+  assert(is_aligned(offset, os::vm_page_size()), "Offset should be page-aligned");
+
+  // VirtualFree with MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER splits the
+  // placeholder [base, base+region_size) into two placeholders:
+  //   [base, base+offset)  and  [base+offset, base+region_size)
+  //
+  // With correct inputs, this should not fail.
+  // A failure indicates either a programming error (e.g., bad alignment,
+  // region not actually a placeholder) or a catastrophic system problem.
+  // Crashing with a diagnostic is more useful than attempting recovery.
+  BOOL result = virtualFree(base, offset, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+  guarantee(result != FALSE,
+            "Failed to split placeholder at " PTR_FORMAT " (offset %zu): error %lu.",
+            p2i(base), offset, GetLastError());
+
+  log_trace(os)("Split placeholder " RANGE_FORMAT " at offset %zu.",
+                RANGE_FORMAT_ARGS(base, region_size), offset);
+
+  return {PlaceholderRegion(base, offset), PlaceholderRegion(base + offset, region_size - offset)};
+}
+
+// Replaces the placeholder via VirtualAlloc2(MEM_REPLACE_PLACEHOLDER).
+// If numa_node >= 0, binds the reservation to that NUMA node.
+static char* convert_placeholder_to_reserved(os::PlaceholderRegion region, int numa_node = -1) {
+  guarantee(is_VirtualAlloc2_supported(), "convert_placeholder_to_reserved requires VirtualAlloc2");
+
+  char* base = region.base();
+  size_t size = region.size();
+
+  assert(base != nullptr, "Region base cannot be null");
+  assert(size > 0, "Region size must be positive");
+
+  MEM_EXTENDED_PARAMETER param = { 0 };
+  MEM_EXTENDED_PARAMETER* param_ptr = nullptr;
+  ULONG param_count = 0;
+
+  if (numa_node >= 0) {
+    param.Type = MemExtendedParameterNumaNode;
+    param.ULong = (DWORD)numa_node;
+    param_ptr = &param;
+    param_count = 1;
+  }
+
+  char* reserved = (char*)os::win32::VirtualAlloc2(
+    GetCurrentProcess(),
+    base,
+    size,
+    MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+    PAGE_READWRITE,
+    param_ptr, param_count);
+  guarantee(reserved != nullptr,
+            "Failed to convert placeholder to reservation at " PTR_FORMAT " (%zu, numa node %d): error %lu.",
+            p2i(base), size, numa_node, GetLastError());
+
+  if (numa_node >= 0) {
+    log_trace(os)("Converted placeholder " RANGE_FORMAT " to reservation on NUMA node %d.", RANGE_FORMAT_ARGS(reserved, size), numa_node);
+  } else {
+    log_trace(os)("Converted placeholder " RANGE_FORMAT " to reservation.", RANGE_FORMAT_ARGS(reserved, size));
+  }
+
+  return reserved;
+}
+
+// Reserve a region split across NUMA nodes.
+// Uses VirtualAlloc2 placeholders in order to avoid races when splitting up the initial reservation into
+// chunks assigned to different nodes. Returns the base address of the reserved range, or nullptr on failure.
+static char* reserve_with_numa_placeholder(char* addr, size_t bytes) {
+  assert(is_VirtualAlloc2_supported(), "requires VirtualAlloc2");
+
+  const size_t chunk_size = NUMAInterleaveGranularity;
+
+  // Reserve the full range as a placeholder.
+  // If we requested an address, reserve_placeholder_memory_helper will obtain it or fail.
+  os::PlaceholderRegion whole_range = reserve_placeholder_memory_helper(bytes, false, addr);
+  if (whole_range.is_empty()) {
+    log_warning(os)("Failed to reserve placeholder for NUMA interleaving (" PTR_FORMAT ", %zu).", p2i(addr), bytes);
+    return nullptr;
+  }
+
+  char* const whole_range_base = whole_range.base();
+  log_trace(os)("Created VirtualAlloc2 NUMA placeholder at " RANGE_FORMAT " (%zu bytes).", RANGE_FORMAT_ARGS(whole_range_base, bytes), bytes);
+
+  char* cur = whole_range_base;
+  size_t remaining_len = whole_range.size();
+
+  int count = 0;
+  const int node_count = numa_node_list_holder.get_count();
+
+  while (remaining_len > 0) {
+    const size_t bytes_to_rq = MIN2(remaining_len, chunk_size - ((size_t)cur % chunk_size));
+    os::PlaceholderRegion remaining(cur, remaining_len);
+    os::PlaceholderRegionPair split = os::split_memory(remaining, bytes_to_rq);
+    DWORD node = node_count > 0 ? numa_node_list_holder.get_node_list_entry(count % node_count) : 0;  // Assign 0 for testing on UMA systems
+    convert_placeholder_to_reserved(split.left, (int)node);
+    cur = split.right.base();
+    remaining_len = split.right.size();
+    count++;
+  }
+
+  return whole_range_base;
+}
+
+// Replaces the placeholder via VirtualAlloc2(MEM_REPLACE_PLACEHOLDER).
+char* os::pd_convert_to_reserved(PlaceholderRegion region) {
+  return convert_placeholder_to_reserved(region);
 }
 
 // Reserve memory at an arbitrary address, only if that area is
@@ -3360,23 +3643,33 @@ char* os::pd_attempt_reserve_memory_at(char* addr, size_t bytes, bool exec) {
   char* res;
   // note that if UseLargePages is on, all the areas that require interleaving
   // will go thru reserve_memory_special rather than thru here.
-  bool use_individual = (UseNUMAInterleaving && !UseLargePages);
-  if (!use_individual) {
-    res = (char*)virtualAlloc(addr, bytes, MEM_RESERVE, PAGE_READWRITE);
+  bool use_numa_interleaving = (UseNUMAInterleaving && !UseLargePages);
+  if (use_numa_interleaving) {
+    if (is_VirtualAlloc2_supported()) {
+      // Splittable NUMA interleaving with VirtualAlloc2 placeholders.
+      res = reserve_with_numa_placeholder(addr, bytes);
+      if (res == nullptr) {
+        log_warning(os)("NUMA allocation using placeholders failed");
+      }
+    } else {
+      // Non-splittable NUMA interleaving: allocate_pages_individually (possible races).
+      elapsedTimer reserveTimer;
+      if (Verbose && PrintMiscellaneous) reserveTimer.start();
+      // in numa interleaving, we have to allocate pages individually
+      // (well really chunks of NUMAInterleaveGranularity size)
+      res = allocate_pages_individually(bytes, addr, MEM_RESERVE, PAGE_READWRITE);
+      if (res == nullptr) {
+        log_warning(os)("NUMA page allocation failed");
+      }
+      if (Verbose && PrintMiscellaneous) {
+        reserveTimer.stop();
+        tty->print_cr("reserve_memory of %zx bytes took " JLONG_FORMAT " ms (" JLONG_FORMAT " ticks)", bytes,
+                reserveTimer.milliseconds(), reserveTimer.ticks());
+      }
+    }
   } else {
-    elapsedTimer reserveTimer;
-    if (Verbose && PrintMiscellaneous) reserveTimer.start();
-    // in numa interleaving, we have to allocate pages individually
-    // (well really chunks of NUMAInterleaveGranularity size)
-    res = allocate_pages_individually(bytes, addr, MEM_RESERVE, PAGE_READWRITE);
-    if (res == nullptr) {
-      warning("NUMA page allocation failed");
-    }
-    if (Verbose && PrintMiscellaneous) {
-      reserveTimer.stop();
-      tty->print_cr("reserve_memory of %zx bytes took " JLONG_FORMAT " ms (" JLONG_FORMAT " ticks)", bytes,
-                    reserveTimer.milliseconds(), reserveTimer.ticks());
-    }
+    // Standard reservation.
+    res = (char*)virtualAlloc(addr, bytes, MEM_RESERVE, PAGE_READWRITE);
   }
   assert(res == nullptr || addr == nullptr || addr == res,
          "Unexpected address from reserve.");
@@ -4561,21 +4854,21 @@ jint os::init_2(void) {
 
   // Lookup SetThreadDescription - the docs state we must use runtime-linking of
   // kernelbase.dll, so that is what we do.
-  HINSTANCE _kernelbase = LoadLibrary(TEXT("kernelbase.dll"));
-  if (_kernelbase != nullptr) {
-    _SetThreadDescription =
-      reinterpret_cast<SetThreadDescriptionFnPtr>(
-                                                  GetProcAddress(_kernelbase,
-                                                                 "SetThreadDescription"));
+  _SetThreadDescription = reinterpret_cast<SetThreadDescriptionFnPtr>(
+      os::win32::lookup_kernelbase_symbol("SetThreadDescription"));
 #ifdef ASSERT
-    _GetThreadDescription =
-      reinterpret_cast<GetThreadDescriptionFnPtr>(
-                                                  GetProcAddress(_kernelbase,
-                                                                 "GetThreadDescription"));
+  _GetThreadDescription = reinterpret_cast<GetThreadDescriptionFnPtr>(
+      os::win32::lookup_kernelbase_symbol("GetThreadDescription"));
 #endif
-  }
   log_info(os, thread)("The SetThreadDescription API is%s available.", _SetThreadDescription == nullptr ? " not" : "");
 
+  // Prepare KernelBase APIs (VirtualAlloc2, MapViewOfFile3) if available (Windows version 1803).
+  os::win32::VirtualAlloc2 = reinterpret_cast<os::win32::VirtualAlloc2Fn>(
+      os::win32::lookup_kernelbase_symbol("VirtualAlloc2"));
+  os::win32::MapViewOfFile3 = reinterpret_cast<os::win32::MapViewOfFile3Fn>(
+      os::win32::lookup_kernelbase_symbol("MapViewOfFile3"));
+  log_debug(os)("VirtualAlloc2 is%s available.", os::win32::VirtualAlloc2 == nullptr ? " not" : "");
+  log_debug(os)("MapViewOfFile3 is%s available.", os::win32::MapViewOfFile3 == nullptr ? " not" : "");
 
   return JNI_OK;
 }
