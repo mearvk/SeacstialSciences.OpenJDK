@@ -1185,6 +1185,36 @@ public abstract class VectorReduction2 {
     }
 
     @Benchmark
+    public void longAddBigMixSub1(Blackhole bh) {
+        long acc = 0; // neutral element
+        for (int i = 0; i < SIZE; i++) {
+            long val = (in1L[i] * in2L[i]) + (in1L[i] * in3L[i]) - (in2L[i] * in3L[i]);
+            acc += val;
+        }
+        bh.consume(acc);
+    }
+
+    @Benchmark
+    public void longAddBigMixSub2(Blackhole bh) {
+        long acc = 0; // neutral element
+        for (int i = 0; i < SIZE; i++) {
+            long val = (in1L[i] * in2L[i]) - (in1L[i] * in3L[i]) + (in2L[i] * in3L[i]);
+            acc += val;
+        }
+        bh.consume(acc);
+    }
+
+    @Benchmark
+    public void longAddBigMixSub3(Blackhole bh) {
+        long acc = 0; // neutral element
+        for (int i = 0; i < SIZE; i++) {
+            long val = (in1L[i] * in2L[i]) - (in1L[i] * in3L[i]) - (in2L[i] * in3L[i]);
+            acc += val;
+        }
+        bh.consume(acc);
+    }
+
+    @Benchmark
     public void longMulBig(Blackhole bh) {
         long acc = 1; // neutral element
         for (int i = 0; i < SIZE; i++) {
