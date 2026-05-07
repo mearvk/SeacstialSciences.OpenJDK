@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -249,7 +249,7 @@ bool JfrTypeManager::initialize() {
   register_static_type(TYPE_BYTECODE, true, new BytecodeConstant());
   register_static_type(TYPE_COMPILERTYPE, true, new CompilerTypeConstant());
   if (MemTracker::enabled()) {
-    register_static_type(TYPE_NMTTYPE, true, new NMTTypeConstant());
+    register_static_type(TYPE_NMTTYPE, false, new NMTTypeConstant());
   }
   return load_thread_constants(JavaThread::current());
 }

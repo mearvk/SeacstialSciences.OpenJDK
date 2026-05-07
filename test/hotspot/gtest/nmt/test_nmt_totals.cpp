@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2022 SAP SE. All rights reserved.
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "memory/allocation.hpp"
 #include "nmt/mallocTracker.hpp"
+#include "nmt/memTagFactory.hpp"
 #include "nmt/memTracker.hpp"
 #include "runtime/os.hpp"
 #include "unittest.hpp"
@@ -88,7 +89,10 @@ TEST_VM(NMTNumbers, totals) {
   void* p[NUM_ALLOCS];
   for (int i = 0; i < NUM_ALLOCS; i ++) {
     // spread over categories
-    int mtag = i % (mt_number_of_tags - 1);
+    int mtag = i % (MemTagFactory::number_of_tags() - 1);
+    if (mtag == (int)mtNone) {
+      mtag++; // skip mtNone memtag
+    }
     p[i] = NEW_C_HEAP_ARRAY(char, ALLOC_SIZE, (MemTag)mtag);
   }
 

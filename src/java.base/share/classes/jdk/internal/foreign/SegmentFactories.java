@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -247,11 +247,7 @@ public class SegmentFactories {
     }
 
     private static long allocateMemoryWrapper(long size) {
-        try {
-            return UNSAFE.allocateMemory(size);
-        } catch (IllegalArgumentException ex) {
-            throw new OutOfMemoryError();
-        }
+        return UNSAFE.allocateMemory(size);
     }
 
     public static MappedMemorySegmentImpl mapSegment(long size, UnmapperProxy unmapper, boolean readOnly, MemorySessionImpl sessionImpl) {

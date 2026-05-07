@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,9 @@
 
 #include "jfr/jfrEvents.hpp"
 #include "jfr/periodic/jfrNativeMemoryEvent.hpp"
+#include "nmt/memTagFactory.hpp"
 #include "nmt/memTracker.hpp"
+#include "nmt/nmtCommon.hpp"
 #include "nmt/nmtUsage.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/ticks.hpp"
@@ -77,8 +79,8 @@ void JfrNativeMemoryEvent::send_type_events(const Ticks& timestamp) {
   }
 
   NMTUsage* usage = get_usage(timestamp);
-
-  for (int index = 0; index < mt_number_of_tags; index ++) {
+  int num_tags = MemTagFactory::number_of_tags();
+  for (int index = 0; index < num_tags; index++) {
     MemTag mem_tag = NMTUtil::index_to_tag(index);
     if (mem_tag == mtNone) {
       // Skip mtNone since it is not really used.

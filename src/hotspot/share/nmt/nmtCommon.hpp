@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2021, 2023 SAP SE. All rights reserved.
 
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -31,6 +31,9 @@
 #include "nmt/memTag.hpp"
 #include "utilities/align.hpp"
 #include "utilities/globalDefinitions.hpp"
+
+#include <limits>
+#include <type_traits>
 
 // Native memory tracking level
 //
@@ -75,9 +78,10 @@ const int NMT_TrackingStackDepth = 4;
 // A few common utilities for native memory tracking
 class NMTUtil : AllStatic {
  public:
+#ifdef ASSERT
   // Check if index is a valid MemTag enum value (including mtNone)
   static inline bool tag_index_is_valid(int index) {
-    return index >= 0 && index < mt_number_of_tags;
+    return index >= 0 && index < NMTUtil::max_number_of_tags();
   }
 
   // Check if tag value is a valid MemTag enum value (including mtNone)
@@ -85,6 +89,7 @@ class NMTUtil : AllStatic {
     const int index = static_cast<int>(mem_tag);
     return tag_index_is_valid(index);
   }
+#endif
 
   // Map memory tag to index
   static inline int tag_to_index(MemTag mem_tag) {
@@ -93,14 +98,10 @@ class NMTUtil : AllStatic {
   }
 
   // Map memory tag to human readable name
-  static const char* tag_to_name(MemTag mem_tag) {
-    return _strings[tag_to_index(mem_tag)].human_readable;
-  }
+  static const char* tag_to_name(MemTag mem_tag);
 
   // Map memory tag to literalized enum name (e.g. "mtTest")
-  static const char* tag_to_enum_name(MemTag mem_tag) {
-    return _strings[tag_to_index(mem_tag)].enum_s;
-  }
+  static const char* tag_to_enum_name(MemTag mem_tag);
 
   // Map an index to memory tag
   static MemTag index_to_tag(int index) {
@@ -130,11 +131,16 @@ class NMTUtil : AllStatic {
   static const char* tracking_level_to_string(NMT_TrackingLevel level);
 
  private:
-  struct S {
-    const char* enum_s; // e.g. "mtNMT"
-    const char* human_readable; // e.g. "Native Memory Tracking"
-  };
-  static S _strings[mt_number_of_tags];
+  public:
+  // The maximum number of tags that NMT can be aware of.
+  static constexpr int max_number_of_tags() {
+    return std::numeric_limits<std::underlying_type_t<MemTag>>::max();
+  }
+
+  // The number of 'built-in' tags, we always expect these to exist in a fully-initialized VM.
+  static constexpr int number_of_enum_tags() {
+    return (int)MemTag::mtNumberOfEnumTags;
+  }
 };
 
 

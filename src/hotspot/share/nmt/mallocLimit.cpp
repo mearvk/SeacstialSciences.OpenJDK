@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2023 SAP SE. All rights reserved.
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,8 +23,10 @@
  *
  */
 
+#include "logging/log.hpp"
 #include "nmt/mallocLimit.hpp"
 #include "nmt/memTag.hpp"
+#include "nmt/memTagFactory.hpp"
 #include "nmt/nmtCommon.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/java.hpp"
@@ -32,7 +34,7 @@
 #include "utilities/ostream.hpp"
 #include "utilities/parseInteger.hpp"
 
-MallocLimitSet MallocLimitHandler::_limits;
+DeferredStatic<MallocLimitSet> MallocLimitHandler::_limits;
 bool MallocLimitHandler::_have_limit = false;
 
 static const char* const MODE_OOM = "oom";
@@ -89,13 +91,22 @@ public:
     }
     stringStream ss;
     ss.print("%.*s", (int)(end - _p), _p);
-    MemTag mem_tag = NMTUtil::string_to_mem_tag(ss.base());
-    if (mem_tag != mtNone) {
-      *out = mem_tag;
-      _p = end;
-      return true;
+    MemTag mem_tag = MemTagFactory::AbsentTag;
+    const char* option = ss.base();
+    bool user_defined_tag = option[0] == '@';
+    option = user_defined_tag ? option + 1 : option; // skip @ if user defined tag
+    bool is_enum_tag = MemTagFactory::is_enum_name(option, &mem_tag);
+    if (!user_defined_tag && !is_enum_tag) {
+      log_warning(nmt)("Unknown memory tag '%s' in malloc-limit option", option);
+      return false;
     }
-    return false;
+    if (user_defined_tag && !is_enum_tag) {
+      mem_tag = MemTagFactory::tag(option);
+    }
+    log_info(nmt)("parsing malloc-limit string of '%s', found: %d", ss.base(), (int)mem_tag);
+    *out = mem_tag;
+    _p  = end;
+    return true;
   }
 
   // Check if string at position matches a memory size (e.g. "100", "100g" etc).
@@ -138,7 +149,7 @@ void MallocLimitSet::set_category_limit(MemTag mem_tag, size_t s, MallocLimitMod
 void MallocLimitSet::reset() {
   set_global_limit(0, MallocLimitMode::trigger_fatal);
   _glob.sz = 0; _glob.mode = MallocLimitMode::trigger_fatal;
-  for (int i = 0; i < mt_number_of_tags; i++) {
+  for (int i = 0; i < NMTUtil::max_number_of_tags(); i++) {
     set_category_limit(NMTUtil::index_to_tag(i), 0, MallocLimitMode::trigger_fatal);
   }
 }
@@ -148,7 +159,7 @@ void MallocLimitSet::print_on(outputStream* st) const {
     st->print_cr("MallocLimit: total limit: " PROPERFMT " (%s)", PROPERFMTARGS(_glob.sz),
                  mode_to_name(_glob.mode));
   } else {
-    for (int i = 0; i < mt_number_of_tags; i++) {
+    for (int i = 0; i < NMTUtil::max_number_of_tags(); i++) {
       if (_mtag[i].sz > 0) {
         st->print_cr("MallocLimit: category \"%s\" limit: " PROPERFMT " (%s)",
                      NMTUtil::tag_to_enum_name(NMTUtil::index_to_tag(i)),
@@ -210,20 +221,26 @@ bool MallocLimitSet::parse_malloclimit_option(const char* v, const char** err) {
   return true;
 }
 
-void MallocLimitHandler::initialize(const char* options) {
+void MallocLimitHandler::reset(const char *options) {
+  _limits->reset();
   _have_limit = false;
   if (options != nullptr && options[0] != '\0') {
     const char* err = nullptr;
-    if (!_limits.parse_malloclimit_option(options, &err)) {
+    if (!_limits->parse_malloclimit_option(options, &err)) {
       vm_exit_during_initialization("Failed to parse MallocLimit", err);
     }
     _have_limit = true;
   }
 }
 
+void MallocLimitHandler::initialize(const char* options) {
+  _limits.initialize();
+  reset(options);
+}
+
 void MallocLimitHandler::print_on(outputStream* st) {
   if (have_limit()) {
-    _limits.print_on(st);
+    _limits->print_on(st);
   } else {
     st->print_cr("MallocLimit: unset");
   }

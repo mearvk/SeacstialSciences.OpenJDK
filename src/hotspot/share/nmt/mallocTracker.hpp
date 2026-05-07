@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2021, 2023 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -150,7 +150,7 @@ class MallocMemorySnapshot {
   friend class MallocMemorySummary;
 
  private:
-  MallocMemory      _malloc[mt_number_of_tags];
+  MallocMemory      _malloc[NMTUtil::max_number_of_tags()];
   MemoryCounter     _all_mallocs;
 
 

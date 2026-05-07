@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,6 +44,7 @@
 #include "memory/metaspaceUtils.hpp"
 #include "memory/referenceType.hpp"
 #include "memory/universe.hpp"
+#include "nmt/memTagFactory.hpp"
 #include "nmt/nmtCommon.hpp"
 #include "oops/compressedOops.hpp"
 #include "runtime/flags/jvmFlag.hpp"
@@ -351,10 +352,22 @@ void CompilerTypeConstant::serialize(JfrCheckpointWriter& writer) {
 }
 
 void NMTTypeConstant::serialize(JfrCheckpointWriter& writer) {
-  writer.write_count(mt_number_of_tags);
-  for (int i = 0; i < mt_number_of_tags; ++i) {
-    writer.write_key(i);
+  int num_tags = MemTagFactory::number_of_tags();
+  writer.write_count((u4)num_tags);
+  for (int i = 0; i < num_tags; ++i) {
+    writer.write_key(static_cast<u8>(i));
     MemTag mem_tag = NMTUtil::index_to_tag(i);
-    writer.write(NMTUtil::tag_to_name(mem_tag));
+    const char* name = MemTagFactory::name_of(mem_tag);
+    writer.write(name);
+  }
+}
+
+void NMTTypeConstant::register_single_type(MemTag i, const char* name) {
+  if (Jfr::is_recording()) {
+    JfrCheckpointWriter w;
+    w.write_type(TYPE_NMTTYPE);
+    w.write_count(1);
+    w.write_key(static_cast<u8>(i));
+    w.write(name);
   }
 }
