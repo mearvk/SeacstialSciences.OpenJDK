@@ -91,7 +91,7 @@ public:
     return array_idx;
   }
 
-  inline constexpr idx_t alignment() const {
+  inline idx_t alignment() const {
     return BitsPerWord;
   }
 
