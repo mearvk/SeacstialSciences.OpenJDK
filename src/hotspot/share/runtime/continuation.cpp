@@ -218,23 +218,14 @@ bool Continuation::is_continuation_entry_frame(const frame& f, const RegisterMap
   return m != nullptr && m->intrinsic_id() == vmIntrinsics::_Continuation_enter;
 }
 
-// The parameter `sp` should be the actual sp and not the unextended sp because at
-// least on PPC64 unextended_sp < sp is possible as interpreted frames are trimmed
-// to the actual size of the expression stack before calls. The problem there is
-// that even unextended_sp < entry_sp < sp is possible for an interpreted frame.
-static inline bool is_sp_in_continuation(const ContinuationEntry* entry, intptr_t* const sp) {
-  // entry_sp() returns the unextended_sp which is always greater or equal to the actual sp
-  return entry->entry_sp() > sp;
-}
-
 bool Continuation::is_frame_in_continuation(const ContinuationEntry* entry, const frame& f) {
-  return is_sp_in_continuation(entry, f.sp());
+  return entry->to_frame().is_older(f.id());
 }
 
-ContinuationEntry* Continuation::get_continuation_entry_for_sp(JavaThread* thread, intptr_t* const sp) {
+ContinuationEntry* Continuation::get_continuation_entry_for_frame(JavaThread* thread, const frame& f) {
   assert(thread != nullptr, "");
   ContinuationEntry* entry = thread->last_continuation();
-  while (entry != nullptr && !is_sp_in_continuation(entry, sp)) {
+  while (entry != nullptr && !is_frame_in_continuation(entry, f)) {
     entry = entry->parent();
   }
   return entry;
@@ -243,12 +234,16 @@ ContinuationEntry* Continuation::get_continuation_entry_for_sp(JavaThread* threa
 ContinuationEntry* Continuation::get_continuation_entry_for_entry_frame(JavaThread* thread, const frame& f) {
   assert(is_continuation_enterSpecial(f), "");
   ContinuationEntry* entry = (ContinuationEntry*)f.unextended_sp();
-  assert(entry == get_continuation_entry_for_sp(thread, f.sp()-2), "mismatched entry");
+  ContinuationEntry* expected = thread->last_continuation();
+  while (expected != nullptr && expected->entry_sp() != f.unextended_sp()) {
+    expected = expected->parent();
+  }
+  assert(entry == expected, "mismatched entry");
   return entry;
 }
 
 bool Continuation::is_frame_in_continuation(JavaThread* thread, const frame& f) {
-  return f.is_heap_frame() || (get_continuation_entry_for_sp(thread, f.sp()) != nullptr);
+  return f.is_heap_frame() || (get_continuation_entry_for_frame(thread, f) != nullptr);
 }
 
 static frame continuation_top_frame(const ContinuationWrapper& cont, RegisterMap* map) {
@@ -274,7 +269,7 @@ frame Continuation::last_frame(oop continuation, RegisterMap *map) {
 
 frame Continuation::top_frame(const frame& callee, RegisterMap* map) {
   assert(map != nullptr, "");
-  ContinuationEntry* ce = get_continuation_entry_for_sp(map->thread(), callee.sp());
+  ContinuationEntry* ce = get_continuation_entry_for_frame(map->thread(), callee);
   assert(ce != nullptr, "");
   oop continuation = ce->cont_oop(map->thread());
   ContinuationWrapper cont(continuation);
@@ -345,7 +340,7 @@ bool Continuation::is_scope_bottom(oop cont_scope, const frame& f, const Registe
   if (map->in_cont()) {
     continuation = map->cont();
   } else {
-    ContinuationEntry* ce = get_continuation_entry_for_sp(map->thread(), f.sp());
+    ContinuationEntry* ce = get_continuation_entry_for_frame(map->thread(), f);
     if (ce == nullptr) {
       return false;
     }
@@ -384,7 +379,7 @@ bool Continuation::unpin(JavaThread* current) {
 
 frame Continuation::continuation_bottom_sender(JavaThread* thread, const frame& callee, intptr_t* sender_sp) {
   assert (thread != nullptr, "");
-  ContinuationEntry* ce = get_continuation_entry_for_sp(thread, callee.sp());
+  ContinuationEntry* ce = get_continuation_entry_for_frame(thread, callee);
   assert(ce != nullptr, "callee.sp(): " INTPTR_FORMAT, p2i(callee.sp()));
 
   log_develop_debug(continuations)("continuation_bottom_sender: [" JLONG_FORMAT "] [%d] callee: " INTPTR_FORMAT
@@ -412,15 +407,15 @@ void Continuation::set_cont_fastpath_thread_state(JavaThread* thread) {
   thread->set_cont_fastpath_thread_state(fast);
 }
 
-void Continuation::notify_deopt(JavaThread* thread, intptr_t* sp) {
+void Continuation::notify_deopt(JavaThread* thread, const frame& f) {
   ContinuationEntry* entry = thread->last_continuation();
 
   if (entry == nullptr) {
     return;
   }
 
-  if (is_sp_in_continuation(entry, sp)) {
-    thread->push_cont_fastpath(sp);
+  if (is_frame_in_continuation(entry, f)) {
+    thread->push_cont_fastpath(entry->entry_fp());
     return;
   }
 
@@ -428,14 +423,18 @@ void Continuation::notify_deopt(JavaThread* thread, intptr_t* sp) {
   do {
     prev = entry;
     entry = entry->parent();
-  } while (entry != nullptr && !is_sp_in_continuation(entry, sp));
+  } while (entry != nullptr && !is_frame_in_continuation(entry, f));
 
   if (entry == nullptr) {
     return;
   }
-  assert(is_sp_in_continuation(entry, sp), "");
-  if (sp > prev->parent_cont_fastpath()) {
-    prev->set_parent_cont_fastpath(sp);
+
+  assert(is_frame_in_continuation(entry, f), "");
+
+  intptr_t* slowpath_boundary = entry->entry_fp();
+  intptr_t* old = prev->parent_cont_fastpath();
+  if (old == nullptr || frame::id_is_older_than(slowpath_boundary, old)) {
+    prev->set_parent_cont_fastpath(slowpath_boundary);
   }
 }
 

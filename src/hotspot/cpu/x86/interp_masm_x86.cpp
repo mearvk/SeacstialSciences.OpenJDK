@@ -1056,7 +1056,7 @@ void InterpreterMacroAssembler::remove_activation(TosState state,
 
   pop(ret_addr);                     // get return address
   mov(rsp, rbx);                     // set sp to sender sp
-  pop_cont_fastpath();
+  pop_cont_fastpath_unwind();
 
 }
 
