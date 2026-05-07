@@ -5017,6 +5017,11 @@ void StubGenerator::generate_compiler_stubs() {
     }
   }
 
+  // Generate AVX2 SIMD binary search stub
+  if (UseAVX2BinarySearchIntrinsic && VM_Version::supports_avx2()) {
+    StubRoutines::_array_binary_search = generate_arrayBinarySearch();
+  }
+
 #endif // COMPILER2
 #endif // COMPILER2_OR_JVMCI
 }
