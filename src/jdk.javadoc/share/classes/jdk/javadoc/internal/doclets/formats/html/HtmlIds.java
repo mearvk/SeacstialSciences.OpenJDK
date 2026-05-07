@@ -607,24 +607,32 @@ public class HtmlIds {
      * of the heading with additional checks to make it unique within its containing page.
      *
      * @param headingText the text contained by the heading
-     * @param headingIds the set of heading ids already generated for the current page
+     * @param existingIds the set of heading ids already generated for the current page
      * @return a unique id value for the heading
      */
-    public HtmlId forHeading(CharSequence headingText, Set<String> headingIds) {
+    public HtmlId forHeading(CharSequence headingText, Set<String> existingIds) {
         String idValue = headingText.toString()
                 .toLowerCase(Locale.ROOT)
                 .trim()
                 .replaceAll("[^\\w_-]+", "-");
-        // Make id value unique
-        idValue = idValue + "-heading";
-        if (!headingIds.add(idValue)) {
-            int counter = 1;
-            while (!headingIds.add(idValue + counter)) {
-                counter++;
-            }
-            idValue = idValue + counter;
-        }
-        return HtmlId.of(idValue);
+        return makeUnique(idValue + "-heading", existingIds);
+    }
+
+    /**
+     * Returns an id for a note.
+     *
+     * @param e the element in whose documentation the note appears
+     * @param kind the kind of note, or null
+     * @param inline true if the id is for an inline note
+     * @param existingIds the set of ids already generated
+     * @return a unique id for the note
+     */
+    public HtmlId forNote(Element e, String kind, boolean inline, Set<String> existingIds) {
+        var id = getElementId(e) + "-" + (kind == null ? "note" : kind);
+        // Multiple block notes are merged into a single description list item,
+        // so ordinal suffixes are usually not needed for block tag ids.
+        return inline ? withUniqueOrdinal(id, existingIds)
+                      : makeUnique(id, existingIds);
     }
 
     /**
@@ -635,26 +643,54 @@ public class HtmlIds {
      * @return a unique id for the snippet
      */
     public HtmlId forSnippet(Element e, Set<String> snippetIds) {
-        String id = "snippet-";
+        return withUniqueOrdinal("snippet-" + getElementId(e), snippetIds);
+    }
+
+    private String getElementId(Element e) {
         ElementKind kind = e.getKind();
         if (kind == ElementKind.PACKAGE) {
-            id += forPackage((PackageElement) e).name();
+            return forPackage((PackageElement) e).name();
         } else if (kind.isDeclaredType()) {
-            id += forClass((TypeElement) e).name();
+            return forClass((TypeElement) e).name();
         } else if (kind.isExecutable()) {
-            id += forMember((ExecutableElement) e).getFirst().name();
+            return forMember((ExecutableElement) e).getFirst().name();
         } else if (kind.isField()) {
-            id += forMember((VariableElement) e).name();
+            return forMember((VariableElement) e).name();
         } else if (kind == ElementKind.MODULE) {
-            id += ((ModuleElement) e).getQualifiedName();
+            return ((ModuleElement) e).getQualifiedName().toString();
         } else {
             // while utterly unexpected, we shouldn't fail
-            id += "unknown-element";
+            return "unknown-element";
         }
+    }
+
+    /**
+     * Returns an HTML id based on a proposed id value that is unique within the
+     * given set of existing ids.
+     *
+     * <p>If the proposed id is not already present in {@code existingIds}, it is
+     * added to the set and returned as-is. Otherwise, an id with a unique ordinal
+     * suffix is added to the set and returned.</p>
+     *
+     * @param id the proposed id
+     * @param existingIds the set of ids already generated
+     * @return a unique id
+     */
+    public HtmlId makeUnique(String id, Set<String> existingIds) {
+        return existingIds.add(id)
+                ? HtmlId.of(id)
+                : withUniqueOrdinal(id, existingIds);
+    }
+
+    /*
+     * Returns an HTML id composed of base and an ordinal suffix that is unique within
+     * the given set of id values. The returned id is added to the set of existing ids.
+     */
+    private HtmlId withUniqueOrdinal(String base, Set<String> existingIds) {
         int counter = 1;
-        while (!snippetIds.add(id + counter)) {
+        while (!existingIds.add(base + counter)) {
             counter++;
         }
-        return HtmlId.of(id + counter);
+        return HtmlId.of(base + counter);
     }
 }

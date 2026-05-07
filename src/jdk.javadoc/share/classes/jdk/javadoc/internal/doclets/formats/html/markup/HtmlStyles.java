@@ -625,6 +625,22 @@ public enum HtmlStyles implements HtmlStyle {
      * also appear in this element.
      */
     notes,
+
+    /**
+     * The class of a {@code span} element containing the header of a {@code note} tag.
+     */
+    noteHeader,
+
+    /**
+     * The class of an element containing a block note tag.
+     */
+    blockNote,
+
+    /**
+     * The class of an element containing an inline note tag.
+     */
+    inlineNote,
+
     //</editor-fold>
 
 
