@@ -238,6 +238,7 @@ void ShenandoahGenerationalHeuristics::add_tenured_regions_to_collection_set(con
     size_t selected_live = 0;
     for (size_t i = 0; i < candidates; i++) {
       ShenandoahHeapRegion *const region = sorted_regions[i]._region;
+      assert(!region->is_atomic_alloc_region(), "There should be no active alloc regions when choosing collection set");
       const size_t region_live_data = sorted_regions[i]._live_data;
       const size_t promotion_need = (size_t)(region_live_data * ShenandoahPromoEvacWaste);
       if (old_consumed + promotion_need > old_promotion_reserve) {

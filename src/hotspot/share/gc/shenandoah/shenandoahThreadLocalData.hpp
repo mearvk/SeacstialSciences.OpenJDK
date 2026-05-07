@@ -64,6 +64,9 @@ private:
 
   ShenandoahEvacuationStats* _evacuation_stats;
 
+  uint   _mutator_allocator_start_index;
+  uint   _collector_allocator_start_index;
+
   Atomic<HeapWord*> _invisible_root;
   Atomic<size_t> _invisible_root_word_size;
 
@@ -172,6 +175,22 @@ public:
 
   static ByteSize card_table_offset() {
     return Thread::gc_data_offset() + byte_offset_of(ShenandoahThreadLocalData, _card_table);
+  }
+
+  static uint mutator_allocator_start_index() {
+    return data(Thread::current())->_mutator_allocator_start_index;
+  }
+
+  static void set_mutator_allocator_start_index(uint start_index) {
+    data(Thread::current())->_mutator_allocator_start_index = start_index;
+  }
+
+  static uint collector_allocator_start_index() {
+    return data(Thread::current())->_collector_allocator_start_index;
+  }
+
+  static void set_collector_allocator_start_index(uint start_index) {
+    data(Thread::current())->_collector_allocator_start_index = start_index;
   }
 
   // invisible root are the partially initialized obj array set by ShenandoahObjArrayAllocator

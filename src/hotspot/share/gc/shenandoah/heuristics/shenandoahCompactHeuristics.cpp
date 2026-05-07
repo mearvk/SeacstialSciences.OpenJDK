@@ -46,9 +46,19 @@ ShenandoahCompactHeuristics::ShenandoahCompactHeuristics(ShenandoahSpaceInfo* sp
 }
 
 bool ShenandoahCompactHeuristics::should_start_gc() {
-  size_t capacity = ShenandoahHeap::heap()->soft_max_capacity();
-  size_t available = _space_info->soft_mutator_available();
-  size_t bytes_allocated = _space_info->bytes_allocated_since_gc_start();
+  ShenandoahHeap* const heap = ShenandoahHeap::heap();
+  size_t capacity = 0;
+  size_t available = 0;
+  size_t bytes_allocated = 0;
+  {
+    ShenandoahHeapLocker locker(heap->lock());
+    capacity = ShenandoahHeap::heap()->soft_max_capacity();
+    size_t const mutator_allocator_remaining = heap->free_set()->mutator_allocator()->remaining_bytes();
+    available = _space_info->soft_mutator_available() + mutator_allocator_remaining;
+    // Subtract the still-unconsumed portion of mutator alloc regions to recover
+    // "actually allocated". See ShenandoahFreeSet::reserve_alloc_regions_internal.
+    bytes_allocated = _space_info->bytes_allocated_since_gc_start() - mutator_allocator_remaining;
+  }
 
   log_debug(gc, ergo)("should_start_gc calculation: available: " PROPERFMT ", soft_max_capacity: "  PROPERFMT ", "
                 "allocated_since_gc_start: "  PROPERFMT,

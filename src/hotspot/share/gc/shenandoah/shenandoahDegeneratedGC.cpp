@@ -306,6 +306,15 @@ void ShenandoahDegenGC::op_degenerated() {
 
       op_cleanup_complete();
 
+      if (_abbreviated) {
+        // The abbreviated path skips op_update_roots() which is the only place
+        // that calls rebuild_free_set() (and thus reserve_alloc_regions()).
+        // Reserve mutator alloc regions here so mutators don't all hit the
+        // heap lock on their first allocation after the pause.
+        ShenandoahHeapLocker locker(heap->lock());
+        heap->free_set()->mutator_allocator()->reserve_alloc_regions();
+      }
+
       if (heap->mode()->is_generational()) {
         ShenandoahGenerationalHeap::heap()->complete_degenerated_cycle();
       }
@@ -359,6 +368,9 @@ void ShenandoahDegenGC::op_finish_mark() {
 
 void ShenandoahDegenGC::op_prepare_evacuation() {
   ShenandoahHeap* const heap = ShenandoahHeap::heap();
+
+  heap->free_set()->release_alloc_regions_under_lock();
+
   if (ShenandoahVerify) {
     heap->verifier()->verify_roots_no_forwarded(_generation);
   }
@@ -399,6 +411,14 @@ void ShenandoahDegenGC::op_prepare_evacuation() {
       Universe::verify();
     }
   }
+
+  {
+    if (heap->is_evacuation_in_progress()) {
+      // Reserve alloc regions for evacuation.
+      ShenandoahHeapLocker locker(heap->lock());
+      heap->free_set()->collector_allocator()->reserve_alloc_regions();
+    }
+  }
 }
 
 bool ShenandoahDegenGC::has_in_place_promotions(const ShenandoahHeap* heap) const {
@@ -419,6 +439,11 @@ void ShenandoahDegenGC::op_init_update_refs() {
   ShenandoahHeap* const heap = ShenandoahHeap::heap();
   heap->prepare_update_heap_references();
   heap->set_update_refs_in_progress(true);
+  {
+    // Release alloc regions from allocators for collector.
+    ShenandoahHeapLocker locker(heap->lock());
+    heap->free_set()->collector_allocator()->release_alloc_regions();
+  }
 }
 
 void ShenandoahDegenGC::op_update_refs() {
@@ -435,6 +460,8 @@ void ShenandoahDegenGC::op_update_roots() {
   ShenandoahHeap* const heap = ShenandoahHeap::heap();
 
   update_roots(false /*full_gc*/);
+
+  heap->free_set()->release_alloc_regions_under_lock();
 
   heap->update_heap_region_states(false /*concurrent*/);
 
