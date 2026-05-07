@@ -1256,7 +1256,7 @@ public abstract sealed class AbstractPoolEntry {
         private final float val;
 
         FloatEntryImpl(ConstantPool cpm, int index, float f) {
-            super(cpm, index, hash1(TAG_FLOAT, Float.hashCode(f)));
+            super(cpm, index, hash1(TAG_FLOAT, Float.floatToRawIntBits(f)));
             val = f;
         }
 
@@ -1290,7 +1290,7 @@ public abstract sealed class AbstractPoolEntry {
         public boolean equals(Object o) {
             if (this == o) return true;
             if (o instanceof FloatEntryImpl e) {
-                return floatValue() == e.floatValue();
+                return Float.floatToRawIntBits(floatValue()) == Float.floatToRawIntBits(e.floatValue());
             }
             return false;
         }
@@ -1351,7 +1351,7 @@ public abstract sealed class AbstractPoolEntry {
         private final double val;
 
         DoubleEntryImpl(ConstantPool cpm, int index, double d) {
-            super(cpm, index, hash1(TAG_DOUBLE, Double.hashCode(d)));
+            super(cpm, index, hash1(TAG_DOUBLE, Long.hashCode(Double.doubleToRawLongBits(d))));
             val = d;
         }
 
@@ -1390,7 +1390,7 @@ public abstract sealed class AbstractPoolEntry {
         public boolean equals(Object o) {
             if (this == o) return true;
             if (o instanceof DoubleEntryImpl e) {
-                return doubleValue() == e.doubleValue();
+                return Double.doubleToRawLongBits(doubleValue()) == Double.doubleToRawLongBits(e.doubleValue());
             }
             return false;
         }

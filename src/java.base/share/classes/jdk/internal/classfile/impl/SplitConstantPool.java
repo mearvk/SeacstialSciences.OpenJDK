@@ -293,13 +293,13 @@ public final class SplitConstantPool implements ConstantPoolBuilder {
     }
 
     private FloatEntry findFloatEntry(float val) {
-        int hash = AbstractPoolEntry.hash1(TAG_FLOAT, Float.hashCode(val));
+        int hash = AbstractPoolEntry.hash1(TAG_FLOAT, Float.floatToRawIntBits(val));
         EntryMap map = map();
         for (int token = map.firstToken(hash); token != -1; token = map.nextToken(hash, token)) {
             PoolEntry e = entryByIndex(map.getIndexByToken(token));
             if (e.tag() == TAG_FLOAT
                     && e instanceof AbstractPoolEntry.FloatEntryImpl ce
-                    && ce.floatValue() == val)
+                    && Float.floatToRawIntBits(ce.floatValue()) == Float.floatToRawIntBits(val))
                 return ce;
         }
         if (!doneFullScan) {
@@ -310,13 +310,13 @@ public final class SplitConstantPool implements ConstantPoolBuilder {
     }
 
     private DoubleEntry findDoubleEntry(double val) {
-        int hash = AbstractPoolEntry.hash1(TAG_DOUBLE, Double.hashCode(val));
+        int hash = AbstractPoolEntry.hash1(TAG_DOUBLE, Long.hashCode(Double.doubleToRawLongBits(val)));
         EntryMap map = map();
         for (int token = map.firstToken(hash); token != -1; token = map.nextToken(hash, token)) {
             PoolEntry e = entryByIndex(map.getIndexByToken(token));
             if (e.tag() == TAG_DOUBLE
                     && e instanceof AbstractPoolEntry.DoubleEntryImpl ce
-                    && ce.doubleValue() == val)
+                    && Double.doubleToRawLongBits(ce.doubleValue()) == Double.doubleToRawLongBits(val))
                 return ce;
         }
         if (!doneFullScan) {
