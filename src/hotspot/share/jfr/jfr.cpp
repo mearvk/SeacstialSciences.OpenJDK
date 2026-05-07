@@ -28,6 +28,7 @@
 #include "jfr/jni/jfrJavaSupport.hpp"
 #include "jfr/leakprofiler/leakProfiler.hpp"
 #include "jfr/recorder/checkpoint/jfrCheckpointManager.hpp"
+#include "jfr/recorder/checkpoint/types/traceid/jfrTraceIdEpoch.hpp"
 #include "jfr/recorder/jfrRecorder.hpp"
 #include "jfr/recorder/repository/jfrEmergencyDump.hpp"
 #include "jfr/recorder/repository/jfrRepository.hpp"
@@ -43,7 +44,6 @@
 #include "oops/klass.hpp"
 #include "runtime/java.hpp"
 #include "runtime/javaThread.hpp"
-
 
 bool Jfr::is_enabled() {
   return JfrRecorder::is_enabled();
@@ -179,6 +179,10 @@ void Jfr::on_report_java_out_of_memory() {
   if (CrashOnOutOfMemoryError && JfrRecorder::is_recording()) {
     JfrRecorderService::emit_leakprofiler_events_on_oom();
   }
+}
+
+bool Jfr::update_epoch(oop oop) {
+  return JfrTraceIdEpoch::update(oop);
 }
 
 #if INCLUDE_CDS
