@@ -877,11 +877,11 @@ static bool mask_shift_amount(PhaseGVN* phase, const Node* shift_node, uint nBit
 }
 
 // Use this in ::Ideal only with shiftNode == this!
-// Sets masked_shift to the masked shift amount if constant or 0 if not constant.
+// Sets masked_shift to the effective masked shift amount if constant or 0 if not constant.
 // Returns shift_node if the shift amount input node was modified, nullptr otherwise.
-static Node* mask_and_replace_shift_amount(PhaseGVN* phase, Node* shift_node, uint nBits, uint& masked_shift) {
+static Node* mask_and_replace_shift_amount(PhaseGVN* phase, Node* shift_node, uint num_bits, uint& masked_shift) {
   int real_shift;
-  if (mask_shift_amount(phase, shift_node, nBits, real_shift, masked_shift)) {
+  if (mask_shift_amount(phase, shift_node, num_bits, real_shift, masked_shift)) {
     if (masked_shift == 0) {
       // Let Identity() handle 0 shift count.
       return nullptr;
@@ -894,10 +894,25 @@ static Node* mask_and_replace_shift_amount(PhaseGVN* phase, Node* shift_node, ui
       // to return the root of the reshaped graph if any change was made.
       return shift_node;
     }
-  } else {
-    // Not a shift by a constant.
-    masked_shift = 0;
+
+    return nullptr;
   }
+
+  // canonicalize shift count via type-level masking to expose constants
+  Node* shift_count = shift_node->in(2);
+  uint mask = num_bits - 1;
+  const TypeInt* t = phase->type(shift_count)->isa_int();
+   if (t != nullptr && (t->_lo < 0 || t->_hi > (int)mask)) {
+    const TypeInt* masked_type = RangeInference::infer_and(t, TypeInt::make(mask));
+
+    if (masked_type != nullptr && masked_type->is_con()) {
+      masked_shift = masked_type->get_con();
+      shift_node->set_req(2, phase->intcon(masked_shift));
+      return shift_node;
+    }
+  }
+
+  masked_shift = 0;
   return nullptr;
 }
 
