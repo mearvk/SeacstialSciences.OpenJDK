@@ -30,6 +30,8 @@
 
 // VM_operations for the G1 collector.
 
+class G1CollectedHeap;
+
 class VM_G1CollectFull : public VM_GC_Collect_Operation {
 protected:
   bool skip_operation() const override;
@@ -106,6 +108,22 @@ public:
   VM_G1PauseCleanup() : VM_G1PauseConcurrent("Pause Cleanup") { }
   VMOp_Type type() const override { return VMOp_G1PauseCleanup; }
   void work() override;
+};
+
+class VM_G1ShrinkHeap : public VM_GC_Operation {
+ private:
+  G1CollectedHeap* _g1h;
+  size_t _bytes;  // Maximum bytes to shrink (used as hint for re-evaluation).
+
+ protected:
+  bool skip_operation() const override;
+
+ public:
+  VM_G1ShrinkHeap(G1CollectedHeap* g1h, uint gc_count_before, size_t bytes)
+    : VM_GC_Operation(gc_count_before, GCCause::_g1_periodic_collection, 0, false),
+      _g1h(g1h), _bytes(bytes) {}
+  VMOp_Type type() const override { return VMOp_G1ShrinkHeap; }
+  void doit() override;  // Re-evaluates regions at safepoint.
 };
 
 #endif // SHARE_GC_G1_G1VMOPERATIONS_HPP
