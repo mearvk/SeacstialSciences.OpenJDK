@@ -37,6 +37,13 @@ class PSYoungGen : public CHeapObj<mtGC> {
   friend class VMStructs;
   friend class ParallelScavengeHeap;
 
+ public:
+  enum class SizingState : int {
+    balanced = 0,
+    constrained,
+    surplus
+  };
+
  private:
   MemRegion       _reserved;
   PSVirtualSpace* _virtual_space;
@@ -49,6 +56,8 @@ class PSYoungGen : public CHeapObj<mtGC> {
   // Sizing information, in bytes, set in constructor
   const size_t _min_gen_size;
   const size_t _max_gen_size;
+
+  SizingState _sizing_state;
 
   // Performance counters
   GenerationCounters*   _gen_counters;
@@ -126,6 +135,8 @@ class PSYoungGen : public CHeapObj<mtGC> {
 
   size_t min_gen_size() const { return _min_gen_size; }
   size_t max_gen_size() const { return _max_gen_size; }
+
+  SizingState sizing_state() const { return _sizing_state; }
 
   // Allocation
   HeapWord* cas_allocate(size_t word_size) {
