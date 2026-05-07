@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -277,6 +277,15 @@ get_frame_count(jvmtiEnv *jvmti, JNIEnv* jni, jthread thread) {
   jvmtiError err = jvmti->GetFrameCount(thread, &frame_count);
   check_jvmti_status(jni, err, "get_frame_count: error in JVMTI GetFrameCount call");
   return frame_count;
+}
+
+static jmethodID
+get_frame_method(jvmtiEnv *jvmti, JNIEnv* jni, jthread thread, jint depth) {
+  jmethodID method;
+  jlocation loc;
+  jvmtiError err = jvmti->GetFrameLocation(thread, depth, &method, &loc);
+  check_jvmti_status(jni, err, "notifyFramePop: Failed in JVMTI GetFrameLocation");
+  return method;
 }
 
 static jvmtiThreadInfo

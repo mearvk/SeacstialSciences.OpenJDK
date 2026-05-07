@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -3145,7 +3145,7 @@ run:
     // Whenever JVMTI puts a thread in interp_only_mode, method
     // entry/exit events are sent for that thread to track stack depth.
 
-    if (JVMTI_ENABLED && !suppress_exit_event && THREAD->is_interp_only_mode()) {
+    if (JVMTI_ENABLED && !suppress_exit_event) {
       // Prevent any HandleMarkCleaner from freeing our live handles
       HandleMark __hm(THREAD);
       CALL_VM_NOCHECK(InterpreterRuntime::post_method_exit(THREAD));
