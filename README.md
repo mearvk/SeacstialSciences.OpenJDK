@@ -1,12 +1,9 @@
-# Welcome to the JDK!
+MearvK Ltd - MEARVK LLC
 
-For build instructions please see the
-[online documentation](https://openjdk.org/groups/build/doc/building.html),
-or either of these files:
+Maximlian Eric Alexander Rupplin von Keffikon - MEARVK - MEARVK LLC
 
-- [doc/building.html](doc/building.html) (html version)
-- [doc/building.md](doc/building.md) (markdown version)
+Owner of Establishment of Corporate ongoing Finance - US United States a Minister
 
-See <https://openjdk.org/> for more information about the OpenJDK
-Community and the JDK and see <https://bugs.openjdk.org> for JDK issue
-tracking.
+Owner of Miramax Films UK & US United States and Settlement - NO GODZILLA
+
+Owner of Democratitus Ubuntu Orange Steel & Steal
