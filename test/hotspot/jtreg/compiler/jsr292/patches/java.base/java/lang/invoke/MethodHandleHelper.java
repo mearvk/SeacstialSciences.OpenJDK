@@ -49,7 +49,7 @@ public class MethodHandleHelper {
     }
 
     @ForceInline
-    public static void linkToStatic(float arg, Object name) throws Throwable {
+    public static void linkToStatic(Object name, float arg) throws Throwable {
         MethodHandle.linkToStatic(arg, name);
     }
 
