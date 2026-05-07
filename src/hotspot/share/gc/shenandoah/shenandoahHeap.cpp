@@ -1251,7 +1251,6 @@ void ShenandoahHeap::concurrent_prepare_for_update_refs() {
 
     // A cancellation at this point means the degenerated cycle must resume from update-refs.
     set_gc_state_concurrent(EVACUATION, false);
-    set_gc_state_concurrent(WEAK_ROOTS, false);
     set_gc_state_concurrent(UPDATE_REFS, true);
   }
 
@@ -1283,7 +1282,6 @@ class ShenandoahCompositeHandshakeClosure : public HandshakeClosure {
 
 void ShenandoahHeap::concurrent_final_roots(HandshakeClosure* handshake_closure) {
   {
-    assert(!is_evacuation_in_progress(), "Should not evacuate for abbreviated or old cycles");
     MutexLocker lock(Threads_lock);
     set_gc_state_concurrent(WEAK_ROOTS, false);
   }
