@@ -181,7 +181,6 @@ protected:
 
   size_t _gc_times_learned;
   intx _gc_time_penalties;
-  TruncatedSeq* _gc_cycle_time_history;
 
   // There may be many threads that contend to set this flag
   ShenandoahSharedFlag _metaspace_oom;
@@ -228,6 +227,10 @@ public:
   virtual void start_idle_span();
   virtual void compute_headroom_adjustment() {
     // Default implementation does nothing.
+  }
+
+  double cycle_start_time_seconds() const {
+    return _cycle_start;
   }
 
   virtual void record_cycle_start();
